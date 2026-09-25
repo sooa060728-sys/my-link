@@ -29,7 +29,7 @@ export default function Home() {
 
           {/* 소개글 */}
           <p className="mt-3 text-base leading-relaxed text-zinc-600 dark:text-zinc-300">
-            안녕하세요! 바이브 코딩을 배우고 있는 대학생입니다.
+            안녕하세요! 웹 기술로 가치 있는 사용자 경험을 만들어가는 프론트엔드 개발자입니다.
           </p>
 
           {/* 관심사 태그 */}
