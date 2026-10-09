@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import {
   Plus,
   Trash2,
@@ -21,11 +23,9 @@ import {
   ArrowUp,
   ArrowDown,
   BarChart3,
-  User,
   Palette,
   Users,
   RotateCcw,
-  Sparkles,
   Layers,
   Check,
   AlertCircle,
@@ -43,6 +43,16 @@ import {
   DialogFooter,
   DialogClose,
 } from '@/components/ui/dialog';
+import {
+  blockSchema,
+  profileSchema,
+  socialSchema,
+  usernameSchema,
+  BlockFormValues,
+  ProfileFormValues,
+  SocialFormValues,
+  UsernameFormValues,
+} from '@/lib/schemas';
 
 const ICON_OPTIONS = [
   { value: 'Globe', label: '웹사이트', icon: Globe },
@@ -78,39 +88,11 @@ const SOCIAL_PLATFORM_OPTIONS = [
   { value: 'website', label: '웹사이트', icon: Globe },
 ];
 
-// --- 유효성 검사 헬퍼 함수 ---
-const isValidHttpUrl = (str: string): boolean => {
-  const trimmed = str.trim();
-  if (!trimmed) return false;
-  if (/^(javascript|data|vbscript):/i.test(trimmed)) return false;
-  
-  let targetUrl = trimmed;
-  if (!/^https?:\/\//i.test(targetUrl)) {
-    targetUrl = `https://${targetUrl}`;
-  }
-  
-  try {
-    const urlObj = new URL(targetUrl);
-    return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
-
-const isValidEmail = (email: string): boolean => {
-  const cleanEmail = email.replace(/^mailto:/i, '').trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail);
-};
-
-const isValidUsername = (handle: string): boolean => {
-  return /^[a-z0-9_]{3,20}$/i.test(handle.trim());
-};
-
 export default function MyPage() {
   const [username, setUsername] = useState('demo');
   const [profile, setProfile] = useState<ProfileData | null>(null);
 
-  // 다이얼로그 제어 상태
+  // 다이얼로그 열림/닫힘 상태
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isProfileDialogOpen, setIsProfileDialogOpen] = useState(false);
@@ -118,34 +100,61 @@ export default function MyPage() {
   const [isAnalyticsDialogOpen, setIsAnalyticsDialogOpen] = useState(false);
   const [isSwitcherDialogOpen, setIsSwitcherDialogOpen] = useState(false);
 
-  // 링크 추가/수정 폼 상태
+  // 수정 대상 링크 ID
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
-  const [blockType, setBlockType] = useState<'link' | 'header'>('link');
-  const [title, setTitle] = useState('');
-  const [url, setUrl] = useState('');
-  const [icon, setIcon] = useState('Globe');
-  const [isActive, setIsActive] = useState(true);
 
-  // 프로필 설정 폼 상태
-  const [profileName, setProfileName] = useState('');
-  const [profileBio, setProfileBio] = useState('');
-  const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
-  const [profileTheme, setProfileTheme] = useState<ThemeType>('light');
-  const [profileButtonStyle, setProfileButtonStyle] = useState<ButtonStyleType>('rounded');
+  // 1) React Hook Form + Zod: 블록 추가 폼
+  const addBlockForm = useForm<BlockFormValues>({
+    resolver: zodResolver(blockSchema),
+    defaultValues: {
+      blockType: 'link',
+      title: '',
+      url: '',
+      icon: 'Globe',
+      isActive: true,
+    },
+  });
 
-  // 소셜 링크 폼 상태
-  const [newSocialPlatform, setNewSocialPlatform] = useState<string>('instagram');
-  const [newSocialUrl, setNewSocialUrl] = useState('');
+  // 2) React Hook Form + Zod: 블록 수정 폼
+  const editBlockForm = useForm<BlockFormValues>({
+    resolver: zodResolver(blockSchema),
+    defaultValues: {
+      blockType: 'link',
+      title: '',
+      url: '',
+      icon: 'Globe',
+      isActive: true,
+    },
+  });
 
-  // 스위처 폼 상태
-  const [newUsernameInput, setNewUsernameInput] = useState('');
+  // 3) React Hook Form + Zod: 프로필 설정 폼
+  const profileForm = useForm<ProfileFormValues>({
+    resolver: zodResolver(profileSchema),
+    defaultValues: {
+      name: '',
+      bio: '',
+      avatarUrl: '',
+      theme: 'light',
+      buttonStyle: 'rounded',
+    },
+  });
 
-  // 폼 검증 에러 상태
-  const [addFormError, setAddFormError] = useState<{ title?: string; url?: string } | null>(null);
-  const [editFormError, setEditFormError] = useState<{ title?: string; url?: string } | null>(null);
-  const [profileFormError, setProfileFormError] = useState<{ name?: string; bio?: string; avatarUrl?: string } | null>(null);
-  const [socialFormError, setSocialFormError] = useState<string | null>(null);
-  const [switcherFormError, setSwitcherFormError] = useState<string | null>(null);
+  // 4) React Hook Form + Zod: 소셜 링크 추가 폼
+  const socialForm = useForm<SocialFormValues>({
+    resolver: zodResolver(socialSchema),
+    defaultValues: {
+      platform: 'instagram',
+      url: '',
+    },
+  });
+
+  // 5) React Hook Form + Zod: 페르소나/핸들 생성 폼
+  const usernameForm = useForm<UsernameFormValues>({
+    resolver: zodResolver(usernameSchema),
+    defaultValues: {
+      username: '',
+    },
+  });
 
   // 로컬스토리지에서 프로필 불러오기
   useEffect(() => {
@@ -153,59 +162,24 @@ export default function MyPage() {
     setProfile(data);
   }, [username]);
 
-  // 링크 추가/수정 폼 초기화
-  const resetLinkForm = () => {
-    setEditingLinkId(null);
-    setBlockType('link');
-    setTitle('');
-    setUrl('');
-    setIcon('Globe');
-    setIsActive(true);
-    setAddFormError(null);
-    setEditFormError(null);
-  };
-
-  // --- 1. 링크 추가 핸들러 ---
-  const handleAddSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAddFormError(null);
+  // --- 1. 링크 추가 제출 (RHF + Zod) ---
+  const onAddBlockSubmit = (data: BlockFormValues) => {
     if (!profile) return;
 
-    const cleanTitle = title.trim();
-    let cleanUrl = url.trim();
-
-    const errors: { title?: string; url?: string } = {};
-
-    if (!cleanTitle) {
-      errors.title = '제목을 입력해 주세요.';
-    } else if (cleanTitle.length > 50) {
-      errors.title = '제목은 50자 이하로 입력해 주세요.';
-    }
-
-    if (blockType === 'link') {
-      if (!cleanUrl) {
-        errors.url = 'URL 주소를 입력해 주세요.';
-      } else if (!isValidHttpUrl(cleanUrl)) {
-        errors.url = '올바른 웹사이트 URL 주소를 입력해 주세요. (예: https://example.com)';
-      } else {
-        if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
-          cleanUrl = `https://${cleanUrl}`;
-        }
+    let formattedUrl = data.url?.trim() || '';
+    if (data.blockType === 'link' && formattedUrl) {
+      if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+        formattedUrl = `https://${formattedUrl}`;
       }
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setAddFormError(errors);
-      return;
     }
 
     const newLink: ProfileLinkItem = {
       id: Date.now().toString(),
-      title: cleanTitle,
-      url: blockType === 'link' ? cleanUrl : '',
-      icon: blockType === 'link' ? icon : undefined,
-      isActive,
-      isHeader: blockType === 'header',
+      title: data.title.trim(),
+      url: data.blockType === 'link' ? formattedUrl : '',
+      icon: data.blockType === 'link' ? data.icon : undefined,
+      isActive: data.isActive ?? true,
+      isHeader: data.blockType === 'header',
       clicks: 0,
     };
 
@@ -216,53 +190,31 @@ export default function MyPage() {
 
     setProfile(updatedProfile);
     saveProfileData(username, updatedProfile);
-    resetLinkForm();
+    addBlockForm.reset({ blockType: 'link', title: '', url: '', icon: 'Globe', isActive: true });
     setIsAddDialogOpen(false);
   };
 
-  // --- 2. 링크 수정 열기 & 제출 핸들러 ---
+  // --- 2. 링크 수정 열기 & 제출 (RHF + Zod) ---
   const handleOpenEditDialog = (link: ProfileLinkItem) => {
     setEditingLinkId(link.id);
-    setBlockType(link.isHeader ? 'header' : 'link');
-    setTitle(link.title);
-    setUrl(link.url || '');
-    setIcon(link.icon || 'Globe');
-    setIsActive(link.isActive);
-    setEditFormError(null);
+    editBlockForm.reset({
+      blockType: link.isHeader ? 'header' : 'link',
+      title: link.title,
+      url: link.url || '',
+      icon: link.icon || 'Globe',
+      isActive: link.isActive,
+    });
     setIsEditDialogOpen(true);
   };
 
-  const handleEditSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setEditFormError(null);
+  const onEditBlockSubmit = (data: BlockFormValues) => {
     if (!editingLinkId || !profile) return;
 
-    const cleanTitle = title.trim();
-    let cleanUrl = url.trim();
-
-    const errors: { title?: string; url?: string } = {};
-
-    if (!cleanTitle) {
-      errors.title = '제목을 입력해 주세요.';
-    } else if (cleanTitle.length > 50) {
-      errors.title = '제목은 50자 이하로 입력해 주세요.';
-    }
-
-    if (blockType === 'link') {
-      if (!cleanUrl) {
-        errors.url = 'URL 주소를 입력해 주세요.';
-      } else if (!isValidHttpUrl(cleanUrl)) {
-        errors.url = '올바른 웹사이트 URL 주소를 입력해 주세요. (예: https://example.com)';
-      } else {
-        if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
-          cleanUrl = `https://${cleanUrl}`;
-        }
+    let formattedUrl = data.url?.trim() || '';
+    if (data.blockType === 'link' && formattedUrl) {
+      if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
+        formattedUrl = `https://${formattedUrl}`;
       }
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setEditFormError(errors);
-      return;
     }
 
     const updatedProfile: ProfileData = {
@@ -271,11 +223,11 @@ export default function MyPage() {
         link.id === editingLinkId
           ? {
               ...link,
-              title: cleanTitle,
-              url: blockType === 'link' ? cleanUrl : '',
-              icon: blockType === 'link' ? icon : undefined,
-              isActive,
-              isHeader: blockType === 'header',
+              title: data.title.trim(),
+              url: data.blockType === 'link' ? formattedUrl : '',
+              icon: data.blockType === 'link' ? data.icon : undefined,
+              isActive: data.isActive ?? true,
+              isHeader: data.blockType === 'header',
             }
           : link
       ),
@@ -283,11 +235,11 @@ export default function MyPage() {
 
     setProfile(updatedProfile);
     saveProfileData(username, updatedProfile);
-    resetLinkForm();
+    editBlockForm.reset();
     setIsEditDialogOpen(false);
   };
 
-  // --- 3. 링크 삭제 & 토글 & 순서 이동 ---
+  // --- 3. 링크 삭제 / 토글 / 순서 이동 ---
   const handleDelete = (id: string) => {
     if (!profile) return;
     const updatedProfile: ProfileData = {
@@ -329,55 +281,29 @@ export default function MyPage() {
     saveProfileData(username, updatedProfile);
   };
 
-  // --- 4. 프로필 정보 & 테마 수정 열기 & 제출 ---
+  // --- 4. 프로필 정보 & 테마 수정 (RHF + Zod) ---
   const handleOpenProfileDialog = () => {
     if (!profile) return;
-    setProfileName(profile.name || '');
-    setProfileBio(profile.bio || '');
-    setProfileAvatarUrl(profile.avatarUrl || '');
-    setProfileTheme(profile.theme || 'light');
-    setProfileButtonStyle(profile.buttonStyle || 'rounded');
-    setProfileFormError(null);
+    profileForm.reset({
+      name: profile.name || '',
+      bio: profile.bio || '',
+      avatarUrl: profile.avatarUrl || '',
+      theme: profile.theme || 'light',
+      buttonStyle: profile.buttonStyle || 'rounded',
+    });
     setIsProfileDialogOpen(true);
   };
 
-  const handleProfileSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setProfileFormError(null);
+  const onProfileSubmit = (data: ProfileFormValues) => {
     if (!profile) return;
-
-    const cleanName = profileName.trim();
-    const cleanBio = profileBio.trim();
-    const cleanAvatar = profileAvatarUrl.trim();
-
-    const errors: { name?: string; bio?: string; avatarUrl?: string } = {};
-
-    if (!cleanName) {
-      errors.name = '프로필 이름을 입력해 주세요.';
-    } else if (cleanName.length > 30) {
-      errors.name = '프로필 이름은 30자 이하로 입력해 주세요.';
-    }
-
-    if (cleanBio.length > 150) {
-      errors.bio = '한줄 소개는 150자 이하로 작성해 주세요.';
-    }
-
-    if (cleanAvatar && !isValidHttpUrl(cleanAvatar)) {
-      errors.avatarUrl = '올바른 이미지 URL 주소를 입력해 주세요. (http:// 또는 https://)';
-    }
-
-    if (Object.keys(errors).length > 0) {
-      setProfileFormError(errors);
-      return;
-    }
 
     const updatedProfile: ProfileData = {
       ...profile,
-      name: cleanName,
-      bio: cleanBio,
-      avatarUrl: cleanAvatar,
-      theme: profileTheme,
-      buttonStyle: profileButtonStyle,
+      name: data.name.trim(),
+      bio: (data.bio || '').trim(),
+      avatarUrl: (data.avatarUrl || '').trim(),
+      theme: data.theme,
+      buttonStyle: data.buttonStyle,
     };
 
     setProfile(updatedProfile);
@@ -385,32 +311,16 @@ export default function MyPage() {
     setIsProfileDialogOpen(false);
   };
 
-  // --- 5. 소셜 링크 관리 다이얼로그 핸들러 ---
-  const handleAddSocialLink = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSocialFormError(null);
+  // --- 5. 소셜 링크 추가 제출 (RHF + Zod) ---
+  const onAddSocialSubmit = (data: SocialFormValues) => {
     if (!profile) return;
 
-    const rawUrl = newSocialUrl.trim();
-    if (!rawUrl) {
-      setSocialFormError('소셜 URL 주소 또는 이메일을 입력해 주세요.');
-      return;
-    }
-
-    let formattedUrl = rawUrl;
-    if (newSocialPlatform === 'email') {
-      if (!isValidEmail(rawUrl)) {
-        setSocialFormError('올바른 이메일 형식을 입력해 주세요. (예: contact@example.com)');
-        return;
-      }
+    let formattedUrl = data.url.trim();
+    if (data.platform === 'email') {
       if (!formattedUrl.startsWith('mailto:')) {
         formattedUrl = `mailto:${formattedUrl}`;
       }
     } else {
-      if (!isValidHttpUrl(rawUrl)) {
-        setSocialFormError('올바른 소셜 웹사이트 URL 주소를 입력해 주세요. (예: https://instagram.com/myaccount)');
-        return;
-      }
       if (!formattedUrl.startsWith('http://') && !formattedUrl.startsWith('https://')) {
         formattedUrl = `https://${formattedUrl}`;
       }
@@ -418,7 +328,7 @@ export default function MyPage() {
 
     const newSocialItem: SocialLinkItem = {
       id: Date.now().toString(),
-      platform: newSocialPlatform as SocialLinkItem['platform'],
+      platform: data.platform,
       url: formattedUrl,
     };
 
@@ -429,8 +339,7 @@ export default function MyPage() {
 
     setProfile(updatedProfile);
     saveProfileData(username, updatedProfile);
-    setNewSocialUrl('');
-    setSocialFormError(null);
+    socialForm.reset({ platform: 'instagram', url: '' });
   };
 
   const handleDeleteSocialLink = (id: string) => {
@@ -455,32 +364,18 @@ export default function MyPage() {
     saveProfileData(username, updatedProfile);
   };
 
-  // --- 7. 페르소나/프로필 스위처 ---
+  // --- 7. 페르소나 / 프로필 스위처 (RHF + Zod) ---
   const handleSwitchProfile = (targetUsername: string) => {
     setUsername(targetUsername);
     const data = getProfileData(targetUsername);
     setProfile(data);
-    setSwitcherFormError(null);
+    usernameForm.reset({ username: '' });
     setIsSwitcherDialogOpen(false);
   };
 
-  const handleCreateCustomProfile = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSwitcherFormError(null);
-
-    const cleanUsername = newUsernameInput.trim().toLowerCase();
-    if (!cleanUsername) {
-      setSwitcherFormError('생성할 커스텀 핸들을 입력해 주세요.');
-      return;
-    }
-
-    if (!isValidUsername(cleanUsername)) {
-      setSwitcherFormError('핸들은 3~20자의 영문 소문자, 숫자, 언더바(_)만 사용 가능합니다.');
-      return;
-    }
-
+  const onCreateUsernameSubmit = (data: UsernameFormValues) => {
+    const cleanUsername = data.username.toLowerCase().trim();
     handleSwitchProfile(cleanUsername);
-    setNewUsernameInput('');
   };
 
   const links = profile?.links || [];
@@ -549,7 +444,7 @@ export default function MyPage() {
             {/* 2. 소셜 아이콘 관리 다이얼로그 */}
             <button
               onClick={() => {
-                setSocialFormError(null);
+                socialForm.reset({ platform: 'instagram', url: '' });
                 setIsSocialsDialogOpen(true);
               }}
               className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
@@ -570,7 +465,7 @@ export default function MyPage() {
             {/* 4. 프로필/페르소나 스위처 다이얼로그 */}
             <button
               onClick={() => {
-                setSwitcherFormError(null);
+                usernameForm.reset({ username: '' });
                 setIsSwitcherDialogOpen(true);
               }}
               className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
@@ -595,7 +490,7 @@ export default function MyPage() {
             {/* 다이얼로그 트리거: 링크 추가 */}
             <button
               onClick={() => {
-                resetLinkForm();
+                addBlockForm.reset({ blockType: 'link', title: '', url: '', icon: 'Globe', isActive: true });
                 setIsAddDialogOpen(true);
               }}
               className="h-10 px-4 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
@@ -721,27 +616,24 @@ export default function MyPage() {
           )}
         </section>
 
-        {/* --- 1. 새 링크/헤더 블록 추가 다이얼로그 --- */}
+        {/* --- 1. 새 링크/헤더 블록 추가 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>새 링크/헤더 블록 추가</DialogTitle>
               <DialogDescription>
-                프로필에 새로 노출할 웹사이트 링크 또는 구분선 헤더 블록을 등록해 보세요.
+                Zod 스키마 검증 기반으로 새로 노출할 웹사이트 링크 또는 구분선 헤더를 등록해 보세요.
               </DialogDescription>
             </DialogHeader>
 
-            <form onSubmit={handleAddSubmit} className="flex flex-col gap-4">
+            <form onSubmit={addBlockForm.handleSubmit(onAddBlockSubmit)} className="flex flex-col gap-4">
               {/* 블록 타입 선택 */}
               <div className="flex rounded-xl bg-[#F2F4F6] p-1 gap-1">
                 <button
                   type="button"
-                  onClick={() => {
-                    setBlockType('link');
-                    setAddFormError(null);
-                  }}
+                  onClick={() => addBlockForm.setValue('blockType', 'link')}
                   className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                    blockType === 'link'
+                    addBlockForm.watch('blockType') === 'link'
                       ? 'bg-white text-[#5B5FC7] shadow-xs'
                       : 'text-[#6B7684] hover:text-[#191F28]'
                   }`}
@@ -751,12 +643,9 @@ export default function MyPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setBlockType('header');
-                    setAddFormError(null);
-                  }}
+                  onClick={() => addBlockForm.setValue('blockType', 'header')}
                   className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                    blockType === 'header'
+                    addBlockForm.watch('blockType') === 'header'
                       ? 'bg-white text-[#5B5FC7] shadow-xs'
                       : 'text-[#6B7684] hover:text-[#191F28]'
                   }`}
@@ -772,33 +661,31 @@ export default function MyPage() {
                   <label htmlFor="add-title" className="text-xs font-bold text-[#333D4B]">
                     제목 <span className="text-[#5B5FC7]">*</span>
                   </label>
-                  <span className="text-[10px] text-[#8B95A1]">{title.length}/50자</span>
+                  <span className="text-[10px] text-[#8B95A1]">
+                    {addBlockForm.watch('title')?.length || 0}/50자
+                  </span>
                 </div>
                 <input
                   id="add-title"
                   type="text"
-                  placeholder={blockType === 'link' ? '예: 유튜브 채널 바로가기' : '예: 📌 주요 소셜 매체'}
-                  value={title}
-                  onChange={(e) => {
-                    setTitle(e.target.value);
-                    if (addFormError?.title) setAddFormError({ ...addFormError, title: undefined });
-                  }}
+                  placeholder={addBlockForm.watch('blockType') === 'link' ? '예: 유튜브 채널 바로가기' : '예: 📌 주요 소셜 매체'}
+                  {...addBlockForm.register('title')}
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
-                    addFormError?.title
+                    addBlockForm.formState.errors.title
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
                   }`}
                 />
-                {addFormError?.title && (
+                {addBlockForm.formState.errors.title && (
                   <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>{addFormError.title}</span>
+                    <span>{addBlockForm.formState.errors.title.message}</span>
                   </div>
                 )}
               </div>
 
               {/* URL (링크 타입일 때만) */}
-              {blockType === 'link' && (
+              {addBlockForm.watch('blockType') === 'link' && (
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="add-url" className="text-xs font-bold text-[#333D4B]">
                     웹사이트 URL 주소 <span className="text-[#5B5FC7]">*</span>
@@ -807,39 +694,35 @@ export default function MyPage() {
                     id="add-url"
                     type="text"
                     placeholder="예: https://youtube.com/@mychannel"
-                    value={url}
-                    onChange={(e) => {
-                      setUrl(e.target.value);
-                      if (addFormError?.url) setAddFormError({ ...addFormError, url: undefined });
-                    }}
+                    {...addBlockForm.register('url')}
                     className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
-                      addFormError?.url
+                      addBlockForm.formState.errors.url
                         ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                         : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
                     }`}
                   />
-                  {addFormError?.url && (
+                  {addBlockForm.formState.errors.url && (
                     <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
                       <AlertCircle className="w-3.5 h-3.5" />
-                      <span>{addFormError.url}</span>
+                      <span>{addBlockForm.formState.errors.url.message}</span>
                     </div>
                   )}
                 </div>
               )}
 
               {/* 아이콘 선택 (링크 타입일 때만) */}
-              {blockType === 'link' && (
+              {addBlockForm.watch('blockType') === 'link' && (
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-bold text-[#333D4B]">아이콘 선택</label>
                   <div className="grid grid-cols-4 gap-2">
                     {ICON_OPTIONS.map((opt) => {
                       const IconComp = opt.icon;
-                      const isSelected = icon === opt.value;
+                      const isSelected = addBlockForm.watch('icon') === opt.value;
                       return (
                         <button
                           key={opt.value}
                           type="button"
-                          onClick={() => setIcon(opt.value)}
+                          onClick={() => addBlockForm.setValue('icon', opt.value)}
                           className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all text-xs gap-1 cursor-pointer ${
                             isSelected
                               ? 'border-[#5B5FC7] bg-[#F0F0FF] text-[#5B5FC7] font-bold'
@@ -863,8 +746,8 @@ export default function MyPage() {
                 </div>
                 <input
                   type="checkbox"
-                  checked={isActive}
-                  onChange={(e) => setIsActive(e.target.checked)}
+                  checked={addBlockForm.watch('isActive')}
+                  onChange={(e) => addBlockForm.setValue('isActive', e.target.checked)}
                   className="w-4 h-4 accent-[#5B5FC7] cursor-pointer"
                 />
               </div>
@@ -885,7 +768,7 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- 2. 블록 정보 수정 다이얼로그 --- */}
+        {/* --- 2. 블록 정보 수정 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
           <DialogContent>
             <DialogHeader>
@@ -895,17 +778,14 @@ export default function MyPage() {
               </DialogDescription>
             </DialogHeader>
 
-            <form onSubmit={handleEditSubmit} className="flex flex-col gap-4">
+            <form onSubmit={editBlockForm.handleSubmit(onEditBlockSubmit)} className="flex flex-col gap-4">
               {/* 블록 타입 */}
               <div className="flex rounded-xl bg-[#F2F4F6] p-1 gap-1">
                 <button
                   type="button"
-                  onClick={() => {
-                    setBlockType('link');
-                    setEditFormError(null);
-                  }}
+                  onClick={() => editBlockForm.setValue('blockType', 'link')}
                   className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                    blockType === 'link'
+                    editBlockForm.watch('blockType') === 'link'
                       ? 'bg-white text-[#5B5FC7] shadow-xs'
                       : 'text-[#6B7684] hover:text-[#191F28]'
                   }`}
@@ -915,12 +795,9 @@ export default function MyPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setBlockType('header');
-                    setEditFormError(null);
-                  }}
+                  onClick={() => editBlockForm.setValue('blockType', 'header')}
                   className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                    blockType === 'header'
+                    editBlockForm.watch('blockType') === 'header'
                       ? 'bg-white text-[#5B5FC7] shadow-xs'
                       : 'text-[#6B7684] hover:text-[#191F28]'
                   }`}
@@ -936,32 +813,30 @@ export default function MyPage() {
                   <label htmlFor="edit-title" className="text-xs font-bold text-[#333D4B]">
                     제목 <span className="text-[#5B5FC7]">*</span>
                   </label>
-                  <span className="text-[10px] text-[#8B95A1]">{title.length}/50자</span>
+                  <span className="text-[10px] text-[#8B95A1]">
+                    {editBlockForm.watch('title')?.length || 0}/50자
+                  </span>
                 </div>
                 <input
                   id="edit-title"
                   type="text"
-                  value={title}
-                  onChange={(e) => {
-                    setTitle(e.target.value);
-                    if (editFormError?.title) setEditFormError({ ...editFormError, title: undefined });
-                  }}
+                  {...editBlockForm.register('title')}
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
-                    editFormError?.title
+                    editBlockForm.formState.errors.title
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
                   }`}
                 />
-                {editFormError?.title && (
+                {editBlockForm.formState.errors.title && (
                   <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>{editFormError.title}</span>
+                    <span>{editBlockForm.formState.errors.title.message}</span>
                   </div>
                 )}
               </div>
 
               {/* URL */}
-              {blockType === 'link' && (
+              {editBlockForm.watch('blockType') === 'link' && (
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor="edit-url" className="text-xs font-bold text-[#333D4B]">
                     URL 주소 <span className="text-[#5B5FC7]">*</span>
@@ -969,39 +844,35 @@ export default function MyPage() {
                   <input
                     id="edit-url"
                     type="text"
-                    value={url}
-                    onChange={(e) => {
-                      setUrl(e.target.value);
-                      if (editFormError?.url) setEditFormError({ ...editFormError, url: undefined });
-                    }}
+                    {...editBlockForm.register('url')}
                     className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
-                      editFormError?.url
+                      editBlockForm.formState.errors.url
                         ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                         : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
                     }`}
                   />
-                  {editFormError?.url && (
+                  {editBlockForm.formState.errors.url && (
                     <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
                       <AlertCircle className="w-3.5 h-3.5" />
-                      <span>{editFormError.url}</span>
+                      <span>{editBlockForm.formState.errors.url.message}</span>
                     </div>
                   )}
                 </div>
               )}
 
               {/* 아이콘 */}
-              {blockType === 'link' && (
+              {editBlockForm.watch('blockType') === 'link' && (
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-bold text-[#333D4B]">아이콘 지정</label>
                   <div className="grid grid-cols-4 gap-2">
                     {ICON_OPTIONS.map((opt) => {
                       const IconComp = opt.icon;
-                      const isSelected = icon === opt.value;
+                      const isSelected = editBlockForm.watch('icon') === opt.value;
                       return (
                         <button
                           key={opt.value}
                           type="button"
-                          onClick={() => setIcon(opt.value)}
+                          onClick={() => editBlockForm.setValue('icon', opt.value)}
                           className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all text-xs gap-1 cursor-pointer ${
                             isSelected
                               ? 'border-[#5B5FC7] bg-[#F0F0FF] text-[#5B5FC7] font-bold'
@@ -1025,8 +896,8 @@ export default function MyPage() {
                 </div>
                 <input
                   type="checkbox"
-                  checked={isActive}
-                  onChange={(e) => setIsActive(e.target.checked)}
+                  checked={editBlockForm.watch('isActive')}
+                  onChange={(e) => editBlockForm.setValue('isActive', e.target.checked)}
                   className="w-4 h-4 accent-[#5B5FC7] cursor-pointer"
                 />
               </div>
@@ -1047,43 +918,41 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- 3. 프로필 & 테마 설정 다이얼로그 --- */}
+        {/* --- 3. 프로필 & 테마 설정 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
               <DialogTitle>프로필 정보 & 테마 스타일 설정</DialogTitle>
               <DialogDescription>
-                PRD DASH-02 & THEME-01~03 요구사항에 따른 프로필 정보와 프리셋 테마를 커스텀해 보세요.
+                Zod 스키마 검증 기반으로 프로필 정보와 프리셋 테마를 커스텀해 보세요.
               </DialogDescription>
             </DialogHeader>
 
-            <form onSubmit={handleProfileSubmit} className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto pr-1">
+            <form onSubmit={profileForm.handleSubmit(onProfileSubmit)} className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto pr-1">
               {/* 이름 */}
               <div className="flex flex-col gap-1.5">
                 <div className="flex justify-between items-center">
                   <label htmlFor="p-name" className="text-xs font-bold text-[#333D4B]">
                     프로필 이름/닉네임 <span className="text-[#5B5FC7]">*</span>
                   </label>
-                  <span className="text-[10px] text-[#8B95A1]">{profileName.length}/30자</span>
+                  <span className="text-[10px] text-[#8B95A1]">
+                    {profileForm.watch('name')?.length || 0}/30자
+                  </span>
                 </div>
                 <input
                   id="p-name"
                   type="text"
-                  value={profileName}
-                  onChange={(e) => {
-                    setProfileName(e.target.value);
-                    if (profileFormError?.name) setProfileFormError({ ...profileFormError, name: undefined });
-                  }}
+                  {...profileForm.register('name')}
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm focus:outline-none transition-all ${
-                    profileFormError?.name
+                    profileForm.formState.errors.name
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
                   }`}
                 />
-                {profileFormError?.name && (
+                {profileForm.formState.errors.name && (
                   <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>{profileFormError.name}</span>
+                    <span>{profileForm.formState.errors.name.message}</span>
                   </div>
                 )}
               </div>
@@ -1094,26 +963,24 @@ export default function MyPage() {
                   <label htmlFor="p-bio" className="text-xs font-bold text-[#333D4B]">
                     한줄 소개 (Bio)
                   </label>
-                  <span className="text-[10px] text-[#8B95A1]">{profileBio.length}/150자</span>
+                  <span className="text-[10px] text-[#8B95A1]">
+                    {profileForm.watch('bio')?.length || 0}/150자
+                  </span>
                 </div>
                 <textarea
                   id="p-bio"
                   rows={2}
-                  value={profileBio}
-                  onChange={(e) => {
-                    setProfileBio(e.target.value);
-                    if (profileFormError?.bio) setProfileFormError({ ...profileFormError, bio: undefined });
-                  }}
+                  {...profileForm.register('bio')}
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm focus:outline-none transition-all ${
-                    profileFormError?.bio
+                    profileForm.formState.errors.bio
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
                   }`}
                 />
-                {profileFormError?.bio && (
+                {profileForm.formState.errors.bio && (
                   <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>{profileFormError.bio}</span>
+                    <span>{profileForm.formState.errors.bio.message}</span>
                   </div>
                 )}
               </div>
@@ -1126,22 +993,18 @@ export default function MyPage() {
                 <input
                   id="p-avatar"
                   type="text"
-                  value={profileAvatarUrl}
-                  onChange={(e) => {
-                    setProfileAvatarUrl(e.target.value);
-                    if (profileFormError?.avatarUrl) setProfileFormError({ ...profileFormError, avatarUrl: undefined });
-                  }}
                   placeholder="https://images.unsplash.com/..."
+                  {...profileForm.register('avatarUrl')}
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm focus:outline-none transition-all ${
-                    profileFormError?.avatarUrl
+                    profileForm.formState.errors.avatarUrl
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
                   }`}
                 />
-                {profileFormError?.avatarUrl && (
+                {profileForm.formState.errors.avatarUrl && (
                   <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
                     <AlertCircle className="w-3.5 h-3.5" />
-                    <span>{profileFormError.avatarUrl}</span>
+                    <span>{profileForm.formState.errors.avatarUrl.message}</span>
                   </div>
                 )}
               </div>
@@ -1153,12 +1016,12 @@ export default function MyPage() {
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {THEME_OPTIONS.map((themeOpt) => {
-                    const isSelected = profileTheme === themeOpt.value;
+                    const isSelected = profileForm.watch('theme') === themeOpt.value;
                     return (
                       <button
                         key={themeOpt.value}
                         type="button"
-                        onClick={() => setProfileTheme(themeOpt.value)}
+                        onClick={() => profileForm.setValue('theme', themeOpt.value)}
                         className={`p-2.5 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs cursor-pointer ${
                           isSelected
                             ? 'border-[#5B5FC7] bg-[#F0F0FF] ring-2 ring-[#5B5FC7]'
@@ -1184,12 +1047,12 @@ export default function MyPage() {
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {BUTTON_STYLE_OPTIONS.map((btnOpt) => {
-                    const isSelected = profileButtonStyle === btnOpt.value;
+                    const isSelected = profileForm.watch('buttonStyle') === btnOpt.value;
                     return (
                       <button
                         key={btnOpt.value}
                         type="button"
-                        onClick={() => setProfileButtonStyle(btnOpt.value)}
+                        onClick={() => profileForm.setValue('buttonStyle', btnOpt.value)}
                         className={`p-2.5 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs cursor-pointer ${
                           isSelected
                             ? 'border-[#5B5FC7] bg-[#F0F0FF] ring-2 ring-[#5B5FC7]'
@@ -1224,7 +1087,7 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- 4. 소셜 링크 관리 다이얼로그 --- */}
+        {/* --- 4. 소셜 링크 관리 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isSocialsDialogOpen} onOpenChange={setIsSocialsDialogOpen}>
           <DialogContent>
             <DialogHeader>
@@ -1278,20 +1141,17 @@ export default function MyPage() {
               </div>
 
               {/* 소셜 링크 추가 폼 */}
-              <form onSubmit={handleAddSocialLink} className="p-3.5 rounded-2xl bg-[#F0F0FF] border border-[#DCDCFB] space-y-3">
-                <div className="text-xs font-bold text-[#5B5FC7]">새 소셜 링크 추가</div>
+              <form onSubmit={socialForm.handleSubmit(onAddSocialSubmit)} className="p-3.5 rounded-2xl bg-[#F0F0FF] border border-[#DCDCFB] space-y-3">
+                <div className="text-xs font-bold text-[#5B5FC7]">새 소셜 링크 추가 (Zod 검증)</div>
                 <div className="grid grid-cols-3 gap-2">
                   {SOCIAL_PLATFORM_OPTIONS.map((opt) => {
-                    const isSelected = newSocialPlatform === opt.value;
+                    const isSelected = socialForm.watch('platform') === opt.value;
                     const IconComp = opt.icon;
                     return (
                       <button
                         key={opt.value}
                         type="button"
-                        onClick={() => {
-                          setNewSocialPlatform(opt.value);
-                          setSocialFormError(null);
-                        }}
+                        onClick={() => socialForm.setValue('platform', opt.value as SocialLinkItem['platform'])}
                         className={`p-1.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer transition-all ${
                           isSelected
                             ? 'bg-white border-[#5B5FC7] text-[#5B5FC7] shadow-xs'
@@ -1310,17 +1170,13 @@ export default function MyPage() {
                     <input
                       type="text"
                       placeholder={
-                        newSocialPlatform === 'email'
+                        socialForm.watch('platform') === 'email'
                           ? '예: contact@example.com'
                           : '예: https://instagram.com/myaccount'
                       }
-                      value={newSocialUrl}
-                      onChange={(e) => {
-                        setNewSocialUrl(e.target.value);
-                        if (socialFormError) setSocialFormError(null);
-                      }}
+                      {...socialForm.register('url')}
                       className={`flex-1 px-3 py-1.5 rounded-xl border bg-white text-xs placeholder-[#8B95A1] focus:outline-none transition-all ${
-                        socialFormError
+                        socialForm.formState.errors.url
                           ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                           : 'border-[#E5E8EB] focus:border-[#5B5FC7]'
                       }`}
@@ -1333,10 +1189,10 @@ export default function MyPage() {
                       <span>추가</span>
                     </button>
                   </div>
-                  {socialFormError && (
+                  {socialForm.formState.errors.url && (
                     <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>{socialFormError}</span>
+                      <span>{socialForm.formState.errors.url.message}</span>
                     </div>
                   )}
                 </div>
@@ -1431,7 +1287,7 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- 6. 페르소나 / 프로필 스위처 다이얼로그 --- */}
+        {/* --- 6. 페르소나 / 프로필 스위처 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isSwitcherDialogOpen} onOpenChange={setIsSwitcherDialogOpen}>
           <DialogContent>
             <DialogHeader>
@@ -1490,21 +1346,17 @@ export default function MyPage() {
                 </div>
               </div>
 
-              {/* 커스텀 핸들 생성 */}
-              <form onSubmit={handleCreateCustomProfile} className="pt-2 border-t border-[#E5E8EB] space-y-2">
-                <div className="text-xs font-bold text-[#333D4B]">새 커스텀 핸들(URL)로 가입/생성</div>
+              {/* 커스텀 핸들 생성 (RHF + Zod) */}
+              <form onSubmit={usernameForm.handleSubmit(onCreateUsernameSubmit)} className="pt-2 border-t border-[#E5E8EB] space-y-2">
+                <div className="text-xs font-bold text-[#333D4B]">새 커스텀 핸들(URL)로 가입/생성 (Zod 검증)</div>
                 <div className="flex flex-col gap-1">
                   <div className="flex gap-2">
                     <input
                       type="text"
                       placeholder="예: my_new_handle"
-                      value={newUsernameInput}
-                      onChange={(e) => {
-                        setNewUsernameInput(e.target.value);
-                        if (switcherFormError) setSwitcherFormError(null);
-                      }}
+                      {...usernameForm.register('username')}
                       className={`flex-1 px-3.5 py-2 rounded-xl border text-xs placeholder-[#8B95A1] focus:outline-none transition-all ${
-                        switcherFormError
+                        usernameForm.formState.errors.username
                           ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                           : 'border-[#E5E8EB] focus:border-[#5B5FC7]'
                       }`}
@@ -1516,10 +1368,10 @@ export default function MyPage() {
                       생성 및 전환
                     </button>
                   </div>
-                  {switcherFormError && (
+                  {usernameForm.formState.errors.username && (
                     <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-1">
                       <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>{switcherFormError}</span>
+                      <span>{usernameForm.formState.errors.username.message}</span>
                     </div>
                   )}
                 </div>
