@@ -4,6 +4,9 @@ import { getFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, Analytics, isSupported } from 'firebase/analytics';
 
+import { collection, doc, setDoc } from 'firebase/firestore';
+import { LinkItem } from '@/types';
+
 // 파이어베이스 환경설정 객체
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyCJI0bJ71PxKeYh4Z1zRFj4GCNj2W1tEIE",
@@ -33,4 +36,36 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/**
+ * 링크 추가 시 Firestore 경로(users/anonymous/links)에 저장하는 함수
+ */
+export async function addLinkToFirestore(link: LinkItem) {
+  try {
+    const linksCollectionRef = collection(db, 'users', 'anonymous', 'links');
+    const docRef = doc(linksCollectionRef, link.id);
+
+    const linkData: Record<string, any> = {
+      id: link.id,
+      title: link.title,
+      url: link.url || '',
+      isActive: link.isActive,
+      isHeader: link.isHeader || false,
+      clicks: link.clicks || 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (link.icon) {
+      linkData.icon = link.icon;
+    }
+
+    await setDoc(docRef, linkData);
+    console.log('Firestore (users/anonymous/links) 저장 성공:', link.id);
+    return link.id;
+  } catch (error) {
+    console.error('Firestore 링크 저장 실패:', error);
+    throw error;
+  }
+}
+
 export { app, auth, db, storage, analytics };
+

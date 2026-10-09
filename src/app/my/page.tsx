@@ -31,6 +31,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { getProfileData, saveProfileData } from '@/lib/profileStorage';
+import { addLinkToFirestore } from '@/lib/firebase';
 import { DUMMY_PROFILES } from '@/lib/dummyData';
 import { ProfileData, LinkItem as ProfileLinkItem, ThemeType, ButtonStyleType, SocialLinkItem } from '@/types';
 import Link from 'next/link';
@@ -163,7 +164,7 @@ export default function MyPage() {
   }, [username]);
 
   // --- 1. 링크 추가 제출 (RHF + Zod) ---
-  const onAddBlockSubmit = (data: BlockFormValues) => {
+  const onAddBlockSubmit = async (data: BlockFormValues) => {
     if (!profile) return;
 
     let formattedUrl = data.url?.trim() || '';
@@ -182,6 +183,13 @@ export default function MyPage() {
       isHeader: data.blockType === 'header',
       clicks: 0,
     };
+
+    // Firestore 저장 (users/anonymous/links)
+    try {
+      await addLinkToFirestore(newLink);
+    } catch (e) {
+      console.error('Firestore 링크 저장 처리 에러:', e);
+    }
 
     const updatedProfile: ProfileData = {
       ...profile,
