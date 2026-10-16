@@ -4,7 +4,7 @@ import { getFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import { getAnalytics, Analytics, isSupported } from 'firebase/analytics';
 
-import { collection, doc, setDoc } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, deleteDoc, query, orderBy, getDocs, onSnapshot, Unsubscribe } from 'firebase/firestore';
 import { LinkItem } from '@/types';
 
 // 파이어베이스 환경설정 객체
@@ -67,5 +67,132 @@ export async function addLinkToFirestore(link: LinkItem) {
   }
 }
 
+/**
+ * 링크 수정 시 Firestore 경로(users/anonymous/links)에 업데이트하는 함수
+ */
+export async function updateLinkInFirestore(id: string, updates: Partial<LinkItem>) {
+  try {
+    const docRef = doc(db, 'users', 'anonymous', 'links', id);
+    const updateData: Record<string, any> = { ...updates };
+    
+    // undefined 속성 제거
+    Object.keys(updateData).forEach((key) => {
+      if (updateData[key] === undefined) {
+        delete updateData[key];
+      }
+    });
+
+    await updateDoc(docRef, updateData);
+    console.log('Firestore (users/anonymous/links) 업데이트 성공:', id);
+  } catch (error) {
+    console.error('Firestore 링크 업데이트 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * 링크 삭제 시 Firestore 경로(users/anonymous/links)에서 제거하는 함수
+ */
+export async function deleteLinkFromFirestore(id: string) {
+  try {
+    const docRef = doc(db, 'users', 'anonymous', 'links', id);
+    await deleteDoc(docRef);
+    console.log('Firestore (users/anonymous/links) 삭제 성공:', id);
+  } catch (error) {
+    console.error('Firestore 링크 삭제 실패:', error);
+    throw error;
+  }
+}
+
+/**
+ * Firestore(users/anonymous/links)에서 최신순(createdAt desc)으로 링크 목록 불러오기
+ */
+export async function getLinksFromFirestore(): Promise<LinkItem[]> {
+  try {
+    const linksRef = collection(db, 'users', 'anonymous', 'links');
+    let querySnapshot;
+    try {
+      const q = query(linksRef, orderBy('createdAt', 'desc'));
+      querySnapshot = await getDocs(q);
+    } catch {
+      querySnapshot = await getDocs(linksRef);
+    }
+
+    const links: (LinkItem & { createdAt?: string })[] = [];
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      links.push({
+        id: data.id || docSnap.id,
+        title: data.title || '',
+        url: data.url || '',
+        icon: data.icon,
+        isActive: data.isActive ?? true,
+        isHeader: data.isHeader ?? false,
+        clicks: data.clicks ?? 0,
+        createdAt: data.createdAt,
+      });
+    });
+
+    links.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    return links;
+  } catch (error) {
+    console.error('Firestore 링크 목록 불러오기 실패:', error);
+    return [];
+  }
+}
+
+/**
+ * Firestore(users/anonymous/links) 실시간 구독 (최신순 createdAt desc)
+ */
+export function subscribeLinksFromFirestore(
+  onUpdate: (links: LinkItem[]) => void,
+  onError?: (error: any) => void
+): Unsubscribe {
+  const linksRef = collection(db, 'users', 'anonymous', 'links');
+
+  const processSnapshot = (querySnapshot: any) => {
+    const links: (LinkItem & { createdAt?: string })[] = [];
+    querySnapshot.forEach((docSnap: any) => {
+      const data = docSnap.data();
+      links.push({
+        id: data.id || docSnap.id,
+        title: data.title || '',
+        url: data.url || '',
+        icon: data.icon,
+        isActive: data.isActive ?? true,
+        isHeader: data.isHeader ?? false,
+        clicks: data.clicks ?? 0,
+        createdAt: data.createdAt,
+      });
+    });
+
+    links.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    onUpdate(links);
+  };
+
+  const q = query(linksRef, orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    processSnapshot,
+    (err) => {
+      console.warn('orderBy index issue, fallbacking to unindexed collection snapshot:', err);
+      if (onError) onError(err);
+      return onSnapshot(linksRef, processSnapshot, onError);
+    }
+  );
+}
+
 export { app, auth, db, storage, analytics };
+
+
 

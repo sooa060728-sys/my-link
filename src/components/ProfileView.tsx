@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { getProfileData, recordPageView, recordLinkClick } from '../lib/profileStorage';
+import { subscribeLinksFromFirestore } from '../lib/firebase';
 import { ProfileData } from '../types';
 import { ThemeContainer } from './ThemeContainer';
 import { LinkCard } from './LinkCard';
@@ -22,6 +23,14 @@ export function ProfileView({ username }: ProfileViewProps) {
     if (loadedData) {
       setProfile(loadedData);
     }
+
+    const unsubscribe = subscribeLinksFromFirestore((firestoreLinks) => {
+      if (firestoreLinks.length > 0) {
+        setProfile((prev) => (prev ? { ...prev, links: firestoreLinks } : prev));
+      }
+    });
+
+    return () => unsubscribe();
   }, [username]);
 
   const handleLinkClick = (linkId: string) => {

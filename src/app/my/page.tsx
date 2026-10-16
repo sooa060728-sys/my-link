@@ -29,9 +29,15 @@ import {
   Layers,
   Check,
   AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { getProfileData, saveProfileData } from '@/lib/profileStorage';
-import { addLinkToFirestore } from '@/lib/firebase';
+import {
+  addLinkToFirestore,
+  updateLinkInFirestore,
+  deleteLinkFromFirestore,
+  subscribeLinksFromFirestore,
+} from '@/lib/firebase';
 import { DUMMY_PROFILES } from '@/lib/dummyData';
 import { ProfileData, LinkItem as ProfileLinkItem, ThemeType, ButtonStyleType, SocialLinkItem } from '@/types';
 import Link from 'next/link';
@@ -104,6 +110,13 @@ export default function MyPage() {
   // 수정 대상 링크 ID
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
 
+  // 로딩 & 동기화 상태 관리
+  const [isLoadingLinks, setIsLoadingLinks] = useState(true);
+  const [isSubmittingBlock, setIsSubmittingBlock] = useState(false);
+  const [isUpdatingBlock, setIsUpdatingBlock] = useState(false);
+  const [deletingLinkId, setDeletingLinkId] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'idle'>('syncing');
+
   // 1) React Hook Form + Zod: 블록 추가 폼
   const addBlockForm = useForm<BlockFormValues>({
     resolver: zodResolver(blockSchema),
@@ -157,15 +170,37 @@ export default function MyPage() {
     },
   });
 
-  // 로컬스토리지에서 프로필 불러오기
+  // 로컬스토리지에서 프로필 불러오기 & Firestore 링크 실시간 연동
   useEffect(() => {
+    setIsLoadingLinks(true);
+    setSyncStatus('syncing');
     const data = getProfileData(username);
     setProfile(data);
+
+    // Firestore(users/anonymous/links)에서 최신순 정렬 링크 실시간 구독
+    const unsubscribe = subscribeLinksFromFirestore(
+      (firestoreLinks) => {
+        if (firestoreLinks.length > 0) {
+          setProfile((prev) => (prev ? { ...prev, links: firestoreLinks } : prev));
+        }
+        setIsLoadingLinks(false);
+        setSyncStatus('synced');
+      },
+      (error) => {
+        console.error('Firestore 구독 에러:', error);
+        setIsLoadingLinks(false);
+        setSyncStatus('idle');
+      }
+    );
+
+    return () => unsubscribe();
   }, [username]);
 
   // --- 1. 링크 추가 제출 (RHF + Zod) ---
   const onAddBlockSubmit = async (data: BlockFormValues) => {
-    if (!profile) return;
+    if (!profile || isSubmittingBlock) return;
+    setIsSubmittingBlock(true);
+    setSyncStatus('syncing');
 
     let formattedUrl = data.url?.trim() || '';
     if (data.blockType === 'link' && formattedUrl) {
@@ -187,8 +222,12 @@ export default function MyPage() {
     // Firestore 저장 (users/anonymous/links)
     try {
       await addLinkToFirestore(newLink);
+      setSyncStatus('synced');
     } catch (e) {
       console.error('Firestore 링크 저장 처리 에러:', e);
+      setSyncStatus('idle');
+    } finally {
+      setIsSubmittingBlock(false);
     }
 
     const updatedProfile: ProfileData = {
@@ -215,8 +254,10 @@ export default function MyPage() {
     setIsEditDialogOpen(true);
   };
 
-  const onEditBlockSubmit = (data: BlockFormValues) => {
-    if (!editingLinkId || !profile) return;
+  const onEditBlockSubmit = async (data: BlockFormValues) => {
+    if (!editingLinkId || !profile || isUpdatingBlock) return;
+    setIsUpdatingBlock(true);
+    setSyncStatus('syncing');
 
     let formattedUrl = data.url?.trim() || '';
     if (data.blockType === 'link' && formattedUrl) {
@@ -225,17 +266,32 @@ export default function MyPage() {
       }
     }
 
+    const updatedLinkData: Partial<ProfileLinkItem> = {
+      title: data.title.trim(),
+      url: data.blockType === 'link' ? formattedUrl : '',
+      icon: data.blockType === 'link' ? data.icon : undefined,
+      isActive: data.isActive ?? true,
+      isHeader: data.blockType === 'header',
+    };
+
+    // Firestore 업데이트
+    try {
+      await updateLinkInFirestore(editingLinkId, updatedLinkData);
+      setSyncStatus('synced');
+    } catch (e) {
+      console.error('Firestore 링크 업데이트 에러:', e);
+      setSyncStatus('idle');
+    } finally {
+      setIsUpdatingBlock(false);
+    }
+
     const updatedProfile: ProfileData = {
       ...profile,
       links: profile.links.map((link) =>
         link.id === editingLinkId
           ? {
               ...link,
-              title: data.title.trim(),
-              url: data.blockType === 'link' ? formattedUrl : '',
-              icon: data.blockType === 'link' ? data.icon : undefined,
-              isActive: data.isActive ?? true,
-              isHeader: data.blockType === 'header',
+              ...updatedLinkData,
             }
           : link
       ),
@@ -248,8 +304,21 @@ export default function MyPage() {
   };
 
   // --- 3. 링크 삭제 / 토글 / 순서 이동 ---
-  const handleDelete = (id: string) => {
-    if (!profile) return;
+  const handleDelete = async (id: string) => {
+    if (!profile || deletingLinkId) return;
+    setDeletingLinkId(id);
+    setSyncStatus('syncing');
+
+    try {
+      await deleteLinkFromFirestore(id);
+      setSyncStatus('synced');
+    } catch (e) {
+      console.error('Firestore 링크 삭제 에러:', e);
+      setSyncStatus('idle');
+    } finally {
+      setDeletingLinkId(null);
+    }
+
     const updatedProfile: ProfileData = {
       ...profile,
       links: profile.links.filter((link) => link.id !== id),
@@ -259,12 +328,21 @@ export default function MyPage() {
     saveProfileData(username, updatedProfile);
   };
 
-  const handleToggleActive = (id: string) => {
+  const handleToggleActive = async (id: string) => {
     if (!profile) return;
+    const targetLink = profile.links.find((l) => l.id === id);
+    if (!targetLink) return;
+    const newActiveState = !targetLink.isActive;
+
+    // Firestore 업데이트
+    updateLinkInFirestore(id, { isActive: newActiveState }).catch((e) =>
+      console.error('Firestore 활성화 토글 에러:', e)
+    );
+
     const updatedProfile: ProfileData = {
       ...profile,
       links: profile.links.map((link) =>
-        link.id === id ? { ...link, isActive: !link.isActive } : link
+        link.id === id ? { ...link, isActive: newActiveState } : link
       ),
     };
 
@@ -488,11 +566,26 @@ export default function MyPage() {
         <section className="bg-white rounded-3xl p-6 border border-[#E5E8EB] shadow-xs space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-base font-bold text-[#191F28] flex items-center gap-2">
-                <Layers className="w-4 h-4 text-[#5B5FC7]" />
-                <span>링크 & 헤더 블록</span>
-              </h2>
-              <p className="text-xs text-[#8B95A1]">버튼을 눌러 다이얼로그 폼으로 새 블록을 추가하세요.</p>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-[#191F28] flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-[#5B5FC7]" />
+                  <span>링크 & 헤더 블록</span>
+                </h2>
+                {/* 실시간 동기화 상태 뱃지 */}
+                {syncStatus === 'syncing' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E8F3FF] text-[#3182F6] animate-pulse">
+                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                    <span>동기화 중...</span>
+                  </span>
+                )}
+                {syncStatus === 'synced' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E8F8EE] text-[#00A854]">
+                    <Check className="w-2.5 h-2.5" />
+                    <span>Firestore 동기화됨</span>
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-[#8B95A1] mt-0.5">버튼을 눌러 다이얼로그 폼으로 새 블록을 추가하세요.</p>
             </div>
 
             {/* 다이얼로그 트리거: 링크 추가 */}
@@ -508,8 +601,34 @@ export default function MyPage() {
             </button>
           </div>
 
-          {/* 블록 목록 */}
-          {links.length === 0 ? (
+          {/* 블록 목록 / 로딩 스켈레톤 */}
+          {isLoadingLinks ? (
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-center gap-2 py-2 text-xs text-[#8B95A1]">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#5B5FC7]" />
+                <span>Firestore에서 최신 링크 목록을 불러오는 중...</span>
+              </div>
+              {[1, 2, 3].map((item) => (
+                <div
+                  key={item}
+                  className="bg-[#F9FAFB] rounded-2xl p-3.5 border border-[#E5E8EB] flex items-center justify-between gap-3 animate-pulse"
+                >
+                  <div className="w-6 h-12 bg-[#E5E8EB] rounded-lg" />
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="w-9 h-9 rounded-xl bg-[#E5E8EB]" />
+                    <div className="space-y-1.5 flex-1">
+                      <div className="h-4 bg-[#E5E8EB] rounded w-2/5" />
+                      <div className="h-3 bg-[#E5E8EB] rounded w-3/5" />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="w-7 h-7 bg-[#E5E8EB] rounded-lg" />
+                    <div className="w-7 h-7 bg-[#E5E8EB] rounded-lg" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : links.length === 0 ? (
             <div className="bg-[#F9FAFB] rounded-2xl p-8 text-center text-[#8B95A1] text-sm border border-dashed border-[#E5E8EB]">
               등록된 블록이 없습니다. 위의 &apos;블록 추가&apos; 버튼을 눌러 새 블록을 만들어 보세요!
             </div>
@@ -609,13 +728,18 @@ export default function MyPage() {
                       {link.isActive ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                     </button>
 
-                    {/* 삭제 */}
+                    {/* 삭제 (로딩 스피너 지원) */}
                     <button
                       onClick={() => handleDelete(link.id)}
-                      className="p-1.5 text-[#8B95A1] hover:text-[#E90064] hover:bg-[#FFF0F0] rounded-lg transition-colors cursor-pointer"
+                      disabled={deletingLinkId === link.id}
+                      className="p-1.5 text-[#8B95A1] hover:text-[#E90064] hover:bg-[#FFF0F0] rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                       title="삭제"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      {deletingLinkId === link.id ? (
+                        <Loader2 className="w-4 h-4 text-[#E90064] animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -766,10 +890,20 @@ export default function MyPage() {
                 </DialogClose>
                 <button
                   type="submit"
-                  className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                  disabled={isSubmittingBlock}
+                  className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>추가하기</span>
+                  {isSubmittingBlock ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>추가 중...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>추가하기</span>
+                    </>
+                  )}
                 </button>
               </DialogFooter>
             </form>
@@ -916,10 +1050,20 @@ export default function MyPage() {
                 </DialogClose>
                 <button
                   type="submit"
-                  className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                  disabled={isUpdatingBlock}
+                  className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>저장하기</span>
+                  {isUpdatingBlock ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>저장 중...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>저장하기</span>
+                    </>
+                  )}
                 </button>
               </DialogFooter>
             </form>
