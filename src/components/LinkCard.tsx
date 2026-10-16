@@ -2,16 +2,19 @@
 
 import React from 'react';
 import { LinkItem, ThemeType, ButtonStyleType } from '../types';
-import { Globe, BookOpen, Mail, ExternalLink, Link as LinkIcon, Video, Share2, Camera, Code } from 'lucide-react';
+import { Globe, BookOpen, Mail, ExternalLink, Link as LinkIcon, Video, Share2, Camera, Code, Pencil, Trash2 } from 'lucide-react';
 
 interface LinkCardProps {
   item: LinkItem;
   theme: ThemeType;
   buttonStyle: ButtonStyleType;
   onLinkClick?: (id: string) => void;
+  onEdit?: (item: LinkItem) => void;
+  onDelete?: (item: LinkItem) => void;
+  showActions?: boolean;
 }
 
-export function LinkCard({ item, theme, buttonStyle, onLinkClick }: LinkCardProps) {
+export function LinkCard({ item, theme, buttonStyle, onLinkClick, onEdit, onDelete, showActions }: LinkCardProps) {
   if (!item.isActive) return null;
 
   if (item.isHeader) {
@@ -96,7 +99,41 @@ export function LinkCard({ item, theme, buttonStyle, onLinkClick }: LinkCardProp
         {renderIcon()}
         <span className="truncate font-semibold">{item.title}</span>
       </span>
-      <ExternalLink className="w-4 h-4 opacity-50 shrink-0 ml-2" />
+      <div className="flex items-center space-x-2 shrink-0 ml-2">
+        {(onEdit || onDelete || showActions) && (
+          <div className="flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+            {onEdit && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onEdit(item);
+                }}
+                className="p-1.5 rounded-lg bg-black/10 hover:bg-black/20 dark:bg-white/10 dark:hover:bg-white/20 text-current transition-colors cursor-pointer"
+                title="수정"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onDelete(item);
+                }}
+                className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-colors cursor-pointer"
+                title="삭제"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+        <ExternalLink className="w-4 h-4 opacity-50 shrink-0" />
+      </div>
     </a>
   );
 }

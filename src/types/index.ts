@@ -9,6 +9,8 @@ export interface LinkItem {
   isActive: boolean;
   isHeader?: boolean;
   clicks?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface SocialLinkItem {

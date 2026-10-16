@@ -19,10 +19,17 @@
   - [x] 웹사이트 링크 / 섹션 헤더 탭 분리
   - [x] 제목, URL, 아이콘 선택, 공개 여부 설정
   - [x] **Zod 스키마 & RHF 폼 검증**: 제목 필수/길이 제한(1~50자), URL 유효성 및 XSS 보안 프로토콜(`javascript:` 등) 방어 검사
-- [x] **[Dialog 2] 블록 정보 수정(Edit) 다이얼로그 (React Hook Form + Zod)**
-  - [x] 기존 데이터 자동 pre-fill
-  - [x] 수정 내용 로컬 스토리지 즉시 반영
-  - [x] **Zod 스키마 & RHF 폼 검증**: 제목 및 URL 유효성 검사 적용
+- [x] **블록 정보 인라인 수정(Inline Edit) UI (React Hook Form + Zod + Firestore)**
+  - [x] 카드 내 인라인 편집 폼 전환 및 기존 데이터 자동 pre-fill
+  - [x] 수정 내용 파이어베이스 Firestore(`users/anonymous/links`) 및 로컬 스토리지 즉시 반영
+  - [x] **동일한 Zod 스키마 & RHF 폼 검증**: 제목(1~50자), URL 유효성 및 XSS 보안 프로토콜 검사
+  - [x] 링크 카드에 수정/삭제 액션 버튼 상시 표시 (Always Visible)
+- [x] **[Dialog 2] 블록 삭제 확인 모달 (Delete Confirmation Dialog with Firestore)**
+  - [x] 제목: "정말 삭제하시겠습니까?"
+  - [x] 삭제 대상 링크 이름 표시
+  - [x] 빨간색 경고 문구: "이 작업은 되돌릴 수 없습니다"
+  - [x] 버튼: [취소], [삭제하기]
+  - [x] 파이어베이스 Firestore(`users/anonymous/links`) 실시간 삭제 연동 및 로컬 스토리지 동기화
 - [x] **[Dialog 3] 프로필 정보 & 테마 스타일 설정 다이얼로그 (React Hook Form + Zod)**
   - [x] 닉네임, 한줄 소개, 아바타 URL 편집
   - [x] 테마 프리셋 6종 시각적 선택 칩

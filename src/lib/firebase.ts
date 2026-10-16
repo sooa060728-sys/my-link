@@ -44,6 +44,7 @@ export async function addLinkToFirestore(link: LinkItem) {
     const linksCollectionRef = collection(db, 'users', 'anonymous', 'links');
     const docRef = doc(linksCollectionRef, link.id);
 
+    const now = new Date().toISOString();
     const linkData: Record<string, any> = {
       id: link.id,
       title: link.title,
@@ -51,7 +52,8 @@ export async function addLinkToFirestore(link: LinkItem) {
       isActive: link.isActive,
       isHeader: link.isHeader || false,
       clicks: link.clicks || 0,
-      createdAt: new Date().toISOString(),
+      createdAt: link.createdAt || now,
+      updatedAt: link.updatedAt || now,
     };
 
     if (link.icon) {
@@ -73,7 +75,10 @@ export async function addLinkToFirestore(link: LinkItem) {
 export async function updateLinkInFirestore(id: string, updates: Partial<LinkItem>) {
   try {
     const docRef = doc(db, 'users', 'anonymous', 'links', id);
-    const updateData: Record<string, any> = { ...updates };
+    const updateData: Record<string, any> = {
+      ...updates,
+      updatedAt: updates.updatedAt || new Date().toISOString(),
+    };
     
     // undefined 속성 제거
     Object.keys(updateData).forEach((key) => {
@@ -130,6 +135,7 @@ export async function getLinksFromFirestore(): Promise<LinkItem[]> {
         isHeader: data.isHeader ?? false,
         clicks: data.clicks ?? 0,
         createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
       });
     });
 
@@ -168,6 +174,7 @@ export function subscribeLinksFromFirestore(
         isHeader: data.isHeader ?? false,
         clicks: data.clicks ?? 0,
         createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
       });
     });
 
