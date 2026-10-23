@@ -1,459 +1,160 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import Link from "next/link";
-import {
-  ChevronRight,
-  Mail,
-  Share2,
-  Check,
-  Copy,
-  ExternalLink,
-  Code2,
-  Layers,
-  Sparkles,
-  Briefcase,
-  FolderGit2,
-  Bell,
-  ArrowUpRight,
-  ShieldCheck,
-  Settings,
-  Eye,
-} from "lucide-react";
+import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
+import { Loader2 } from 'lucide-react';
 
-export default function Home() {
-  const [copied, setCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"projects" | "tech" | "experience">("projects");
+export default function LandingPage() {
+  const router = useRouter();
+  const { user, loading, isLoggingIn, login } = useAuth();
+  const [isRedirecting, setIsRedirecting] = useState(false);
 
-  const handleCopyLink = () => {
-    if (typeof window !== "undefined") {
-      navigator.clipboard.writeText(window.location.href);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+  // 로그인에 성공하면 마이링크 본 페이지(/my)로 자동 이동
+  const handleGoogleLogin = async () => {
+    try {
+      const loggedUser = await login();
+      if (loggedUser) {
+        setIsRedirecting(true);
+        router.push('/my');
+      }
+    } catch (e: any) {
+      if (e?.code !== 'auth/popup-closed-by-user') {
+        alert('로그인에 실패했습니다. 다시 시도해 주세요.');
+      }
     }
   };
 
-  const techStack = [
-    { name: "Next.js 16", category: "프레임워크", level: "숙련", highlight: true },
-    { name: "React 19", category: "라이브러리", level: "숙련", highlight: true },
-    { name: "TypeScript", category: "언어", level: "우수", highlight: false },
-    { name: "Tailwind CSS v4", category: "스타일링", level: "숙련", highlight: true },
-    { name: "Zustand & TanStack", category: "상태 관리", level: "우수", highlight: false },
-    { name: "Figma Design System", category: "디자인 시스템", level: "우수", highlight: false },
-  ];
-
-  const projects = [
-    {
-      id: "mylink",
-      title: "MyLink 바이오 링크 서비스",
-      subtitle: "멀티링크 프로필 생성 및 커스텀 분석 서비스이에요.",
-      tags: ["Next.js 16", "React 19", "Tailwind CSS"],
-      badge: "대표 프로젝트",
-      url: "https://github.com/sooa060728-sys",
-      iconBg: "bg-[#E8F3FF] text-[#3182F6]",
-    },
-    {
-      id: "ai-assistant",
-      title: "AI 코드 어시스턴트 대시보드",
-      subtitle: "AI 프롬프트 생성과 리팩토링 관리 인터페이스이에요.",
-      tags: ["React", "TypeScript", "Vite"],
-      badge: "신규 서비스",
-      url: "https://github.com/sooa060728-sys",
-      iconBg: "bg-[#F2F4F6] text-[#191F28]",
-    },
-    {
-      id: "design-system",
-      title: "Vibe UI 디자인 시스템",
-      subtitle: "접근성과 반응형 라이브러리를 위한 컴포넌트 킷이에요.",
-      tags: ["Storybook", "Framer Motion"],
-      badge: "오픈소스",
-      url: "https://github.com/sooa060728-sys",
-      iconBg: "bg-[#F2F4F6] text-[#191F28]",
-    },
-  ];
-
-  const experiences = [
-    {
-      period: "2024년 - 현재",
-      role: "프론트엔드 리드 개발자",
-      company: "Tech Innovation Corp",
-      description: "Next.js 아키텍처 설계와 렌더링 성능 45% 개선을 달성했어요.",
-    },
-    {
-      period: "2023년 - 2024년",
-      role: "UI/UX 프론트엔드 개발자",
-      company: "Creative Studio",
-      description: "반응형 웹 인터페이스와 디자인 시스템 컴포넌트를 구축했어요.",
-    },
-    {
-      period: "2022년 - 2023년",
-      role: "오픈소스 및 바이브 코딩 기여",
-      company: "개인 프로젝트",
-      description: "다양한 웹 툴 개발과 GitHub 오픈소스 생태계에 활발히 참여했어요.",
-    },
-  ];
+  // 이미 로그인되어 있는 경우
+  const handleGoToMyPage = () => {
+    setIsRedirecting(true);
+    router.push('/my');
+  };
 
   return (
-    <div className="min-h-screen bg-[#F2F4F6] text-[#191F28] font-sans antialiased pb-28">
-      
-      {/* 1. Top App Bar (상단 앱 바 - 56pt) */}
-      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-[#E5E8EB] h-14 px-4 sm:px-6 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          {/* 토스 스타일 심볼 & 타이틀 */}
-          <div className="w-7 h-7 rounded-lg bg-[#3182F6] flex items-center justify-center text-white font-black text-xs">
-            toss
-          </div>
-          <span className="font-bold text-[17px] text-[#191F28] tracking-tight">
-            이수아의 프로필
+    <div className="min-h-screen bg-white text-[#191F28] font-sans antialiased flex flex-col justify-between selection:bg-[#185EF7]/10 selection:text-[#185EF7]">
+      {/* 1. 상단 내비게이션 바 */}
+      <header className="w-full h-16 sm:h-20 px-6 sm:px-12 flex items-center justify-between border-b border-transparent">
+        {/* 로고 */}
+        <div className="flex items-center">
+          <span className="font-extrabold text-[20px] sm:text-[22px] text-[#185EF7] tracking-tight">
+            MyLink
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Link
-            href="/my"
-            className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white rounded-full text-xs font-bold transition-colors shadow-xs"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span>내 프로필 관리 (/my)</span>
-          </Link>
-          <Link
-            href="/demo"
-            className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#F0F0FF] hover:bg-[#E2E2FF] text-[#5B5FC7] border border-[#DCDCFB] rounded-full text-xs font-bold transition-colors"
-          >
-            <Eye className="w-3.5 h-3.5" />
-            <span>공개 프로필 (/demo)</span>
-          </Link>
-          <button
-            onClick={handleCopyLink}
-            className="w-9 h-9 rounded-full flex items-center justify-center text-[#4E5968] hover:bg-[#F2F4F6] transition-colors"
-            title="링크 공유"
-          >
-            <Share2 className="w-4.5 h-4.5" />
-          </button>
+        {/* 우측 로그인 / 대시보드 버튼 */}
+        <div>
+          {loading ? (
+            <div className="w-16 h-8 flex items-center justify-center">
+              <Loader2 className="w-4 h-4 animate-spin text-[#185EF7]" />
+            </div>
+          ) : user ? (
+            <button
+              onClick={handleGoToMyPage}
+              disabled={isRedirecting}
+              className="h-9 sm:h-10 px-4 sm:px-5 bg-[#185EF7] hover:bg-[#1249C9] active:scale-[0.98] text-white font-bold text-xs sm:text-sm rounded-md transition-all shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+            >
+              {isRedirecting ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>이동 중...</span>
+                </>
+              ) : (
+                <span>마이링크 관리</span>
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={handleGoogleLogin}
+              disabled={isLoggingIn || isRedirecting}
+              className="h-8 sm:h-9 px-4 sm:px-5 bg-[#185EF7] hover:bg-[#1249C9] active:scale-[0.98] text-white font-bold text-xs sm:text-sm rounded transition-all shadow-xs flex items-center justify-center cursor-pointer disabled:opacity-60"
+            >
+              {isLoggingIn || isRedirecting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+              ) : (
+                <span>로그인</span>
+              )}
+            </button>
+          )}
         </div>
       </header>
 
-      {/* 복사 완료 토스트 피드백 */}
-      {copied && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 bg-[#191F28] text-white px-5 py-3 rounded-2xl tds-shadow-toast text-[15px] font-semibold flex items-center gap-2.5 z-50 animate-in fade-in slide-in-from-top-4 duration-200">
-          <div className="w-5 h-5 rounded-full bg-[#20874E] flex items-center justify-center text-white text-xs">
-            ✓
-          </div>
-          <span>프로필 링크가 복사되었어요!</span>
-        </div>
-      )}
+      {/* 2. 메인 히어로 섹션 */}
+      <main className="flex-1 flex flex-col items-center justify-center px-4 pt-6 pb-12 sm:pb-16 max-w-4xl mx-auto w-full text-center">
+        {/* 메인 타이틀: Development in One Link. */}
+        <div className="space-y-3">
+          <h1 className="text-[38px] sm:text-[62px] md:text-[68px] font-black tracking-tight text-[#111827] leading-[1.12]">
+            Development in <span className="text-[#185EF7]">One</span>
+            <br />
+            <span className="text-[#185EF7]">Link</span>
+            <span className="text-[#111827]">.</span>
+          </h1>
 
-      {/* 메인 콘텐츠 컨테이너 */}
-      <main className="mx-auto max-w-xl px-4 pt-6 space-y-4">
-        
-        {/* 마이링크 대시보드 & 프로필 바로가기 안내 카드 */}
-        <div className="bg-white rounded-3xl p-5 border border-[#E5E8EB] tds-shadow-1 space-y-3.5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#F0F0FF] text-[#5B5FC7] flex items-center justify-center flex-shrink-0">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-[15px] font-bold text-[#191F28] tracking-tight">
-                마이링크 프로필 관리 & 공개 보기
-              </div>
-              <div className="text-xs text-[#8B95A1] mt-0.5 leading-relaxed">
-                링크를 수정하거나 실제 공개된 프로필 화면을 확인해보세요.
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-[#F2F4F6]">
-            <Link
-              href="/my"
-              className="px-3.5 py-2.5 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-xs"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              <span>프로필 관리 (/my)</span>
-            </Link>
-            <Link
-              href="/demo"
-              target="_blank"
-              className="px-3.5 py-2.5 bg-[#F0F0FF] hover:bg-[#E2E2FF] text-[#5B5FC7] border border-[#DCDCFB] text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5"
-            >
-              <Eye className="w-3.5 h-3.5" />
-              <span>공개 보기 (/demo)</span>
-              <ExternalLink className="w-3 h-3" />
-            </Link>
+          {/* 서브 설명 문구 */}
+          <div className="pt-4 text-sm sm:text-base text-[#4E5968] font-normal leading-relaxed">
+            <p>GitHub, 블로그, 포트폴리오까지.</p>
+            <p>개발자를 위한 모든 링크를 한 페이지에 담아보세요.</p>
           </div>
         </div>
-        
-        {/* 2. Hero Header Card (radius-3xl / 24px - 토스 표준 대형 카드) */}
-        <div className="bg-white rounded-3xl p-6 border border-[#E5E8EB] tds-shadow-1 space-y-5">
-          
-          {/* 아바타 & 상태 정보 */}
-          <div className="flex items-start justify-between">
-            <div className="relative">
-              <div className="w-20 h-20 rounded-full overflow-hidden border-2 border-[#F2F4F6] bg-[#F9FAFB]">
-                <img
-                  src="/images/avatar.jpg"
-                  alt="이수아 프로필"
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <span className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-[#20874E] border-2 border-white" title="현재 연락 가능" />
-            </div>
 
-            <span className="inline-flex items-center gap-1.5 bg-[#E8F3FF] text-[#3182F6] font-semibold text-xs px-3 py-1.5 rounded-full">
-              <Sparkles className="w-3.5 h-3.5" />
-              연락 가능해요
-            </span>
-          </div>
-
-          {/* 타이틀 & 대화형 해요체 소개 카피 */}
-          <div className="space-y-2">
-            <h1 className="text-2xl font-bold tracking-tight text-[#191F28]">
-              안녕하세요! 프론트엔드 개발자 이수아이에요 💙
-            </h1>
-            <p className="text-[15px] text-[#4E5968] leading-relaxed">
-              웹 기술로 가치 있는 사용자 경험을 만들어가요. 직관적인 UI 디자인과 쾌적한 웹 성능을 구축하고 있어요.
-            </p>
-          </div>
-
-          {/* 주요 통계 리스트 수치 */}
-          <div className="grid grid-cols-3 gap-2 py-3 px-4 bg-[#F9FAFB] rounded-2xl border border-[#E5E8EB] text-center">
-            <div>
-              <div className="text-xs text-[#8B95A1] font-medium mb-0.5">완료 프로젝트</div>
-              <div className="text-lg font-bold text-[#3182F6] tabular-nums">12개</div>
-            </div>
-            <div className="border-x border-[#E5E8EB]">
-              <div className="text-xs text-[#8B95A1] font-medium mb-0.5">개발 경력</div>
-              <div className="text-lg font-bold text-[#191F28] tabular-nums">3년+</div>
-            </div>
-            <div>
-              <div className="text-xs text-[#8B95A1] font-medium mb-0.5">커밋 기록</div>
-              <div className="text-lg font-bold text-[#191F28] tabular-nums">1.2k+</div>
-            </div>
-          </div>
-
-          {/* 단일 Toss Blue Primary Action Button (TDS 규율: 화면당 1개) */}
-          <a
-            href="mailto:contact@example.com"
-            className="w-full h-14 bg-[#3182F6] hover:bg-[#1B64DA] active:scale-[0.98] text-white font-bold text-[17px] rounded-full transition-all flex items-center justify-center gap-2 shadow-md"
-          >
-            <Mail className="w-5 h-5" />
-            <span>이메일로 문의하기</span>
-          </a>
-
-        </div>
-
-        {/* 3. Segmented Control (분절형 탭 필터) */}
-        <div className="bg-[#E5E8EB] p-1 rounded-full flex gap-1">
+        {/* 중앙 CTA 버튼: Google로 시작하기 */}
+        <div className="mt-8 sm:mt-10">
           <button
-            onClick={() => setActiveTab("projects")}
-            className={`flex-1 py-2.5 rounded-full text-[15px] font-semibold transition-all ${
-              activeTab === "projects"
-                ? "bg-white text-[#191F28] tds-shadow-1"
-                : "text-[#6B7684] hover:text-[#191F28]"
-            }`}
+            onClick={user ? handleGoToMyPage : handleGoogleLogin}
+            disabled={isLoggingIn || isRedirecting}
+            className="w-64 sm:w-72 h-12 sm:h-13 bg-[#185EF7] hover:bg-[#1249C9] active:scale-[0.98] text-white font-semibold text-sm sm:text-[15px] rounded-md shadow-md transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60"
           >
-            대표 프로젝트
-          </button>
-          <button
-            onClick={() => setActiveTab("tech")}
-            className={`flex-1 py-2.5 rounded-full text-[15px] font-semibold transition-all ${
-              activeTab === "tech"
-                ? "bg-white text-[#191F28] tds-shadow-1"
-                : "text-[#6B7684] hover:text-[#191F28]"
-            }`}
-          >
-            기술 스택
-          </button>
-          <button
-            onClick={() => setActiveTab("experience")}
-            className={`flex-1 py-2.5 rounded-full text-[15px] font-semibold transition-all ${
-              activeTab === "experience"
-                ? "bg-white text-[#191F28] tds-shadow-1"
-                : "text-[#6B7684] hover:text-[#191F28]"
-            }`}
-          >
-            경력 & 이력
+            {isLoggingIn || isRedirecting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>{user ? '마이링크로 이동 중...' : '로그인 처리 중...'}</span>
+              </>
+            ) : (
+              <>
+                {/* Google 화이트 'G' 로고 */}
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M21.35 11.1H12v3.16h5.36c-.24 1.4-1.02 2.59-2.18 3.39v2.8h3.53c2.06-1.9 3.25-4.7 3.25-8.05 0-.44-.04-.89-.11-1.3z" fill="#ffffff" />
+                  <path d="M12 21c2.43 0 4.47-.8 5.96-2.17l-3.53-2.8c-.81.54-1.84.86-2.93.86-2.25 0-4.16-1.52-4.84-3.57H2.98v2.88C4.46 19.14 7.97 21 12 21z" fill="#ffffff" />
+                  <path d="M7.16 13.32c-.17-.52-.27-1.08-.27-1.65 0-.58.1-1.13.27-1.65V7.14H2.98A9.97 9.97 0 0 0 2 11.67c0 1.61.39 3.14 1.07 4.53l4.09-2.88z" fill="#ffffff" />
+                  <path d="M12 5.51c1.32 0 2.51.46 3.45 1.35l2.58-2.58C16.46 2.8 14.42 2 12 2 7.97 2 4.46 3.86 2.98 6.81l4.18 2.88c.68-2.05 2.59-3.57 4.84-3.57z" fill="#ffffff" />
+                </svg>
+                <span>{user ? '마이링크 본 페이지로 이동' : 'Google로 시작하기'}</span>
+              </>
+            )}
           </button>
         </div>
 
-        {/* 4. 탭 1: 대표 프로젝트 (TDS Standard List-Row 패턴) */}
-        {activeTab === "projects" && (
-          <div className="space-y-3">
-            <div className="text-xs font-semibold text-[#8B95A1] px-1 pt-1">
-              확인하고 싶은 프로젝트를 선택해 보세요
-            </div>
-
-            {projects.map((project) => (
-              <a
-                key={project.id}
-                href={project.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block bg-white rounded-2xl p-4 border border-[#E5E8EB] hover:border-[#B0B8C1] transition-all tds-shadow-1 group"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  
-                  {/* 44px 표준 아이콘 슬롯 */}
-                  <div className={`w-11 h-11 rounded-2xl ${project.iconBg} flex items-center justify-center font-bold text-lg flex-shrink-0`}>
-                    <FolderGit2 className="w-5 h-5" />
-                  </div>
-
-                  {/* 타이틀 및 설명 스택 */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-[17px] font-bold text-[#191F28] group-hover:text-[#3182F6] transition-colors truncate">
-                        {project.title}
-                      </span>
-                      <span className="text-[11px] font-semibold bg-[#F2F4F6] text-[#6B7684] px-2 py-0.5 rounded-md flex-shrink-0">
-                        {project.badge}
-                      </span>
-                    </div>
-                    <p className="text-[14px] text-[#4E5968] truncate mb-2">
-                      {project.subtitle}
-                    </p>
-
-                    {/* 태그 목록 */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {project.tags.map((tag) => (
-                        <span
-                          key={tag}
-                          className="text-[12px] font-medium text-[#6B7684] bg-[#F9FAFB] px-2 py-0.5 rounded-md border border-[#E5E8EB]"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* 우측 화살표 슬롯 */}
-                  <ChevronRight className="w-5 h-5 text-[#B0B8C1] group-hover:text-[#3182F6] transition-colors flex-shrink-0" />
-                </div>
-              </a>
-            ))}
-          </div>
-        )}
-
-        {/* 5. 탭 2: 기술 스택 (TDS Clean Card Grid) */}
-        {activeTab === "tech" && (
-          <div className="bg-white rounded-3xl p-5 border border-[#E5E8EB] tds-shadow-1 space-y-4">
-            <div className="text-[17px] font-bold text-[#191F28] flex items-center gap-2">
-              <Code2 className="w-5 h-5 text-[#3182F6]" />
-              주요 기술 역량이에요
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {techStack.map((tech, idx) => (
-                <div
-                  key={idx}
-                  className="p-3.5 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] flex items-center justify-between"
-                >
-                  <div>
-                    <div className="text-[15px] font-bold text-[#191F28]">
-                      {tech.name}
-                    </div>
-                    <div className="text-xs text-[#8B95A1]">
-                      {tech.category}
-                    </div>
-                  </div>
-                  <span
-                    className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
-                      tech.highlight
-                        ? "bg-[#E8F3FF] text-[#3182F6]"
-                        : "bg-[#F2F4F6] text-[#6B7684]"
-                    }`}
-                  >
-                    {tech.level}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* 6. 탭 3: 경력 & 이력 (TDS Timeline View) */}
-        {activeTab === "experience" && (
-          <div className="bg-white rounded-3xl p-5 border border-[#E5E8EB] tds-shadow-1 space-y-5">
-            <div className="text-[17px] font-bold text-[#191F28] flex items-center gap-2">
-              <Briefcase className="w-5 h-5 text-[#3182F6]" />
-              경력 및 성장 이력이에요
-            </div>
-
-            <div className="space-y-4">
-              {experiences.map((exp, idx) => (
-                <div
-                  key={idx}
-                  className="p-4 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] space-y-1.5"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[#3182F6] bg-[#E8F3FF] px-2.5 py-0.5 rounded-full">
-                      {exp.period}
-                    </span>
-                    <span className="text-xs font-medium text-[#8B95A1]">
-                      {exp.company}
-                    </span>
-                  </div>
-                  <div className="text-[16px] font-bold text-[#191F28]">
-                    {exp.role}
-                  </div>
-                  <p className="text-[14px] text-[#4E5968]">
-                    {exp.description}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* 7. 소셜 & 깃허브 하단 셀 섹션 */}
-        <div className="bg-white rounded-3xl p-4 border border-[#E5E8EB] tds-shadow-1 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#191F28] text-white flex items-center justify-center font-bold text-sm">
-              GH
-            </div>
-            <div>
-              <div className="text-[15px] font-bold text-[#191F28]">
-                GitHub 오픈소스 프로필
-              </div>
-              <div className="text-xs text-[#8B95A1]">
-                sooa060728-sys
+        {/* 3. 하단 비스듬한 목업 카드 UI (와이어프레임 이미지와 동일) */}
+        <div className="mt-14 sm:mt-16 w-full max-w-sm sm:max-w-md mx-auto">
+          <div className="relative bg-white rounded-3xl p-5 sm:p-6 shadow-[0_20px_50px_rgba(25,31,40,0.09),0_2px_8px_rgba(25,31,40,0.04)] border border-[#E5E8EB] transform -rotate-1 hover:rotate-0 transition-transform duration-300">
+            {/* 상단 프로필 스켈레톤 (원형 아바타 + 텍스트 바 2줄) */}
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 rounded-full bg-[#E5E8EB] flex-shrink-0" />
+              <div className="space-y-2 flex-1 text-left">
+                <div className="h-4 bg-[#E5E8EB] rounded-md w-32" />
+                <div className="h-2.5 bg-[#F2F4F6] rounded-md w-20" />
               </div>
             </div>
-          </div>
 
-          <a
-            href="https://github.com/sooa060728-sys"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs font-bold text-[#3182F6] bg-[#E8F3FF] hover:bg-[#D4E8FF] px-3.5 py-2 rounded-full transition-colors flex items-center gap-1"
-          >
-            <span>방문하기</span>
-            <ArrowUpRight className="w-3.5 h-3.5" />
-          </a>
+            {/* 첫 번째 링크 카드: 소프트 블루 블록 (원형 아이콘 + 링크 바) */}
+            <div className="h-13 bg-[#EEF5FF] rounded-2xl flex items-center px-4 gap-3 mb-3 border border-[#E0EDFF]">
+              <div className="w-4 h-4 rounded-full bg-[#82B1FF] flex-shrink-0" />
+              <div className="h-3 bg-[#C8DEFF] rounded-md w-36" />
+            </div>
+
+            {/* 두 번째 링크 카드: 소프트 그레이 블록 (원형 아이콘 + 링크 바) */}
+            <div className="h-13 bg-[#F9FAFB] rounded-2xl flex items-center px-4 gap-3 border border-[#E5E8EB]">
+              <div className="w-4 h-4 rounded-full bg-[#E5E8EB] flex-shrink-0" />
+              <div className="h-3 bg-[#E5E8EB] rounded-md w-44" />
+            </div>
+          </div>
         </div>
-
-        {/* 푸터 카피라이트 */}
-        <footer className="pt-6 pb-4 text-center text-xs text-[#8B95A1] space-y-1">
-          <div className="flex items-center justify-center gap-1 font-medium">
-            <ShieldCheck className="w-4 h-4 text-[#20874E]" />
-            <span>토스 디자인 시스템(TDS) 가이드라인 준수</span>
-          </div>
-          <p>© {new Date().getFullYear()} 이수아 (Sooa Lee). All rights reserved.</p>
-        </footer>
-
       </main>
 
-      {/* 8. Floating Bottom CTA (화면 하단 고정 56pt 버튼 + 보호 그라디언트) */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 tds-cta-gradient z-40 flex justify-center">
-        <div className="w-full max-w-xl">
-          <button
-            onClick={handleCopyLink}
-            className="w-full h-14 bg-[#191F28] hover:bg-[#333D4B] active:scale-[0.98] text-white font-bold text-[17px] rounded-full transition-all tds-shadow-2 flex items-center justify-center gap-2"
-          >
-            <Copy className="w-5 h-5" />
-            <span>{copied ? "프로필 링크가 복사되었어요!" : "프로필 링크 복사하기"}</span>
-          </button>
-        </div>
-      </div>
-
+      {/* 4. 하단 미니 푸터 */}
+      <footer className="w-full py-4 text-center text-xs text-[#8B95A1]">
+        © {new Date().getFullYear()} MyLink. All rights reserved.
+      </footer>
     </div>
   );
 }

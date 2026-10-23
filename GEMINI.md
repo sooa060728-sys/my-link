@@ -78,6 +78,17 @@ flowchart TD
     - [x] **대시보드 통계 & 애널리틱스 다이얼로그** (총 PV, 총 클릭수, 개별 링크 클릭 비율 퍼센트 바)
     - [x] **페르소나 / 프로필 스위처 다이얼로그** (`demo`, `creator_hana`, `dev_minjun`, `design_yuna` 및 신규 핸들 생성)
     - [x] **블록 순서 변경 (Up/Down)** (목록 위치 이동 및 저장)
+- [x] **구글 소셜 로그인 & Firestore 개인화 (Google Auth & Firestore Personalization)**
+  - `src/lib/firebase.ts`: `loginWithGoogle`, `logoutFirebase`, `saveUserProfileToFirestore` 구현
+  - `src/context/AuthContext.tsx`: 전역 인증 상태 및 유저 프로필 관리
+  - `src/components/Header.tsx`: 구글 로그인/로그아웃, 유저 프로필 및 `users/{user.uid}/links` 경로 복사 버튼
+  - `src/app/my/page.tsx`:
+    - `users/{user.uid}/links` 경로 기반 개인화된 실시간 링크 CRUD
+    - 대시보드 상단 Firestore 유저 정보(사진, 닉네임, 이메일, UID, 경로) 시각화
+    - 미로그인 시 로그인 유도 및 기능 설명 화면 제공
+- [x] **와이어프레임 1:1 오프닝 랜딩 페이지 (`src/app/page.tsx`)**
+  - `Development in One Link.` 타이포그래피, 상단 헤더, `Google로 시작하기` CTA 버튼
+  - 3D 틸트 목업 카드 및 로그인 후 `/my` 본 페이지 자동 전환 연동
 - [x] **공개 프로필 연동**
   - `src/components/ProfileView.tsx`: 마운트 시 PV 자동 누적 및 링크 클릭 시 클릭수 집계
 

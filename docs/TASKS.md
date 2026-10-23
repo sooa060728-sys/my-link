@@ -61,7 +61,33 @@
 
 ---
 
-## 4. 검증 및 문서화 (Verification & Docs)
-- [x] Next.js 16 `npm run build` 빌드 검증 통과
+## 4. 구글 소셜 로그인 & Firestore users/{user.uid}/links 개인화
+- [x] **Firebase Auth 구글 소셜 로그인 연동**
+  - [x] `src/lib/firebase.ts`: `loginWithGoogle`, `logoutFirebase`, `saveUserProfileToFirestore`, `getUserProfileFromFirestore` 구현
+  - [x] `src/context/AuthContext.tsx`: 전역 인증 상태 관리 (`AuthProvider`, `useAuth`)
+  - [x] `src/app/layout.tsx`: `AuthProvider` 전역 래핑
+- [x] **공통 상단 헤더 컴포넌트 (`src/components/Header.tsx`)**
+  - [x] 구글 소셜 로그인 버튼 및 로딩 피드백
+  - [x] 로그인 상태 시 구글 프로필 사진, 닉네임, 이메일, 로그아웃 버튼 노출
+  - [x] 개인화된 Firestore 경로 (`users/{user.uid}/links`) 뱃지 및 원클릭 복사 기능
+- [x] **Firestore users/{user.uid}/links 개인화 저장 및 실시간 동기화**
+  - [x] `users/anonymous/links`에서 `users/{user.uid}/links`로 마이그레이션
+  - [x] 블록 추가, 인라인 수정, 순서 변경, 삭제 확인 모달 모두 개인화된 컬렉션 경로에 저장
+  - [x] `src/app/my/page.tsx` 대시보드 화면 상단에 Firestore 유저 정보 및 경로 상세 표시
+- [x] **로그인 상태에 따른 화면 분기 처리 (`src/app/my/page.tsx`)**
+  - [x] **미로그인 상태**: 로그인 유도 배너, 설명 문구, 주요 혜택 카드 3종, 중앙 Google 로그인 버튼 노출
+  - [x] **로그인 상태**: 개인화된 유저 정보 카드 및 링크 CRUD 대시보드 활성화
+- [x] **와이어프레임 1:1 오프닝 랜딩 페이지 (`src/app/page.tsx`)**
+  - [x] `Development in One Link.` 메인 타이포그래피 & 카피라이팅 구현
+  - [x] 상단 헤더: `MyLink` 로고 + `로그인` 버튼
+  - [x] 중앙 CTA: `Google로 시작하기` 버튼 (구글 로그인 팝업 트리거)
+  - [x] 하단 목업 카드: 아바타/텍스트 스켈레톤 + 활성 파란 링크 바 + 회색 링크 바 3D 틸트 카드
+  - [x] 로그인 완료 시 마이링크 본 페이지(`/my`)로 자동 리다이렉트 연동
+- [x] **Base UI (`@base-ui/react`) 표준 규격 검증 완료**
+
+---
+
+## 5. 검증 및 문서화 (Verification & Docs)
+- [x] Next.js 16 `npm run build` 빌드 검증 통과 (Turbopack)
 - [x] `GEMINI.md` 한글 가이드라인 작성
-- [x] `PLAN.md`, `TASKS.md`, `WALKTHROUGH.md` 문서 작성
+- [x] `PLAN.md`, `TASKS.md`, `WALKTHROUGH.md` 문서 최신화

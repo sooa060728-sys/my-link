@@ -31,6 +31,12 @@ import {
   AlertCircle,
   Loader2,
   Clock,
+  Database,
+  Lock,
+  Sparkles,
+  ShieldCheck,
+  Copy,
+  LogOut,
 } from 'lucide-react';
 import { getProfileData, saveProfileData } from '@/lib/profileStorage';
 import {
@@ -42,6 +48,8 @@ import {
 import { DUMMY_PROFILES } from '@/lib/dummyData';
 import { ProfileData, LinkItem as ProfileLinkItem, ThemeType, ButtonStyleType, SocialLinkItem } from '@/types';
 import Link from 'next/link';
+import { Header } from '@/components/Header';
+import { useAuth } from '@/context/AuthContext';
 import {
   Dialog,
   DialogContent,
@@ -122,8 +130,11 @@ function formatUpdatedAt(dateStr?: string): string {
 }
 
 export default function MyPage() {
+  const { user, firestoreUser, loading: authLoading, isLoggingIn, login, logout } = useAuth();
+
   const [username, setUsername] = useState('demo');
   const [profile, setProfile] = useState<ProfileData | null>(null);
+  const [copiedPath, setCopiedPath] = useState(false);
 
   // 다이얼로그 열림/닫힘 상태
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -143,7 +154,7 @@ export default function MyPage() {
   const [isLoadingLinks, setIsLoadingLinks] = useState(true);
   const [isSubmittingBlock, setIsSubmittingBlock] = useState(false);
   const [isUpdatingBlock, setIsUpdatingBlock] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'idle'>('syncing');
+  const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'idle'>('idle');
 
   // 1) React Hook Form + Zod: 블록 추가 폼
   const addBlockForm = useForm<BlockFormValues>({
@@ -198,35 +209,72 @@ export default function MyPage() {
     },
   });
 
-  // 로컬스토리지에서 프로필 불러오기 & Firestore 링크 실시간 연동
+  // 로그인 상태 변경 시 username 및 기본 프로필 설정
   useEffect(() => {
+    if (user) {
+      // 로그인된 경우 user.uid 기반 또는 이메일 접두사 핸들 사용
+      const defaultUsername = user.email ? user.email.split('@')[0] : user.uid.slice(0, 8);
+      setUsername(defaultUsername);
+    }
+  }, [user]);
+
+  // Firestore 링크 실시간 연동 (users/{user.uid}/links)
+  useEffect(() => {
+    // 로그아웃 상태이거나 인증 확인 중이면 진행하지 않음
+    if (authLoading) return;
+    if (!user) {
+      setIsLoadingLinks(false);
+      setSyncStatus('idle');
+      return;
+    }
+
+    const currentUid = user.uid;
     setIsLoadingLinks(true);
     setSyncStatus('syncing');
-    const data = getProfileData(username);
-    setProfile(data);
 
-    // Firestore(users/anonymous/links)에서 최신순 정렬 링크 실시간 구독
+    // 로컬 스토리지에 저장된 기본 프로필 정보 로드
+    const data = getProfileData(username);
+    const initialProfile: ProfileData = {
+      ...data,
+      name: data.name || user.displayName || '구글 사용자',
+      avatarUrl: data.avatarUrl || user.photoURL || '',
+      username: username,
+    };
+    setProfile(initialProfile);
+
+    // Firestore(users/{user.uid}/links)에서 최신순 정렬 링크 실시간 구독
     const unsubscribe = subscribeLinksFromFirestore(
       (firestoreLinks) => {
-        if (firestoreLinks.length > 0) {
-          setProfile((prev) => (prev ? { ...prev, links: firestoreLinks } : prev));
-        }
+        setProfile((prev) => (prev ? { ...prev, links: firestoreLinks } : {
+          ...initialProfile,
+          links: firestoreLinks,
+        }));
         setIsLoadingLinks(false);
         setSyncStatus('synced');
       },
       (error) => {
-        console.error('Firestore 구독 에러:', error);
+        console.error(`Firestore (users/${currentUid}/links) 구독 에러:`, error);
         setIsLoadingLinks(false);
         setSyncStatus('idle');
-      }
+      },
+      currentUid
     );
 
     return () => unsubscribe();
-  }, [username]);
+  }, [user, username, authLoading]);
 
-  // --- 1. 링크 추가 제출 (RHF + Zod + Firestore) ---
+  // Firestore 컬렉션 경로 복사 함수
+  const handleCopyFirestorePath = () => {
+    if (!user) return;
+    const path = `users/${user.uid}/links`;
+    navigator.clipboard.writeText(path);
+    setCopiedPath(true);
+    setTimeout(() => setCopiedPath(false), 2000);
+  };
+
+  // --- 1. 링크 추가 제출 (RHF + Zod + Firestore users/{user.uid}/links) ---
   const onAddBlockSubmit = async (data: BlockFormValues) => {
-    if (!profile || isSubmittingBlock) return;
+    if (!user || !profile || isSubmittingBlock) return;
     setIsSubmittingBlock(true);
     setSyncStatus('syncing');
 
@@ -251,10 +299,10 @@ export default function MyPage() {
     };
 
     try {
-      // Firestore 저장 및 사용자 경험을 위한 부드러운 스피닝 로딩 보장
+      // Firestore (users/{user.uid}/links) 저장
       await Promise.all([
-        addLinkToFirestore(newLink),
-        new Promise((resolve) => setTimeout(resolve, 500)),
+        addLinkToFirestore(newLink, user.uid),
+        new Promise((resolve) => setTimeout(resolve, 400)),
       ]);
       setSyncStatus('synced');
 
@@ -266,7 +314,6 @@ export default function MyPage() {
       setProfile(updatedProfile);
       saveProfileData(username, updatedProfile);
       addBlockForm.reset({ blockType: 'link', title: '', url: '', icon: 'Globe', isActive: true });
-      // 완료 후 모달 닫기
       setIsAddDialogOpen(false);
     } catch (e) {
       console.error('Firestore 링크 저장 처리 에러:', e);
@@ -276,7 +323,7 @@ export default function MyPage() {
     }
   };
 
-  // --- 2. 링크 인라인 수정 시작/취소 & 제출 (RHF + Zod + Firestore) ---
+  // --- 2. 링크 인라인 수정 시작/취소 & 제출 (RHF + Zod + Firestore users/{user.uid}/links) ---
   const handleStartInlineEdit = (link: ProfileLinkItem) => {
     setEditingLinkId(link.id);
     editBlockForm.reset({
@@ -294,7 +341,7 @@ export default function MyPage() {
   };
 
   const onEditBlockSubmit = async (data: BlockFormValues) => {
-    if (!editingLinkId || !profile || isUpdatingBlock) return;
+    if (!user || !editingLinkId || !profile || isUpdatingBlock) return;
     setIsUpdatingBlock(true);
     setSyncStatus('syncing');
 
@@ -315,11 +362,11 @@ export default function MyPage() {
       updatedAt: now,
     };
 
-    // Firestore 업데이트 (users/anonymous/links/{editingLinkId})
+    // Firestore 업데이트 (users/{user.uid}/links/{editingLinkId})
     try {
       await Promise.all([
-        updateLinkInFirestore(editingLinkId, updatedLinkData),
-        new Promise((resolve) => setTimeout(resolve, 400)),
+        updateLinkInFirestore(editingLinkId, updatedLinkData, user.uid),
+        new Promise((resolve) => setTimeout(resolve, 350)),
       ]);
       setSyncStatus('synced');
     } catch (e) {
@@ -347,16 +394,16 @@ export default function MyPage() {
     setEditingLinkId(null);
   };
 
-  // --- 3. 링크 삭제 확인 모달 실행 (Firestore 연동) ---
+  // --- 3. 링크 삭제 확인 모달 실행 (Firestore users/{user.uid}/links) ---
   const handleConfirmDelete = async () => {
-    if (!deletingLink || !profile || isDeletingInFirestore) return;
+    if (!user || !deletingLink || !profile || isDeletingInFirestore) return;
     const targetId = deletingLink.id;
     setIsDeletingInFirestore(true);
     setSyncStatus('syncing');
 
     try {
-      // Firestore 삭제 (users/anonymous/links/{targetId})
-      await deleteLinkFromFirestore(targetId);
+      // Firestore 삭제 (users/{user.uid}/links/{targetId})
+      await deleteLinkFromFirestore(targetId, user.uid);
       setSyncStatus('synced');
     } catch (e) {
       console.error('Firestore 링크 삭제 에러:', e);
@@ -379,14 +426,14 @@ export default function MyPage() {
   };
 
   const handleToggleActive = async (id: string) => {
-    if (!profile) return;
+    if (!user || !profile) return;
     const targetLink = profile.links.find((l) => l.id === id);
     if (!targetLink) return;
     const newActiveState = !targetLink.isActive;
     const now = new Date().toISOString();
 
     // Firestore 업데이트
-    updateLinkInFirestore(id, { isActive: newActiveState, updatedAt: now }).catch((e) =>
+    updateLinkInFirestore(id, { isActive: newActiveState, updatedAt: now }, user.uid).catch((e) =>
       console.error('Firestore 활성화 토글 에러:', e)
     );
 
@@ -398,6 +445,7 @@ export default function MyPage() {
     };
 
     setProfile(updatedProfile);
+    saveProfileData(username, updatedProfile);
   };
 
   const handleMoveLink = (index: number, direction: 'up' | 'down') => {
@@ -421,9 +469,9 @@ export default function MyPage() {
   const handleOpenProfileDialog = () => {
     if (!profile) return;
     profileForm.reset({
-      name: profile.name || '',
+      name: profile.name || user?.displayName || '',
       bio: profile.bio || '',
-      avatarUrl: profile.avatarUrl || '',
+      avatarUrl: profile.avatarUrl || user?.photoURL || '',
       theme: profile.theme || 'light',
       buttonStyle: profile.buttonStyle || 'rounded',
     });
@@ -520,484 +568,758 @@ export default function MyPage() {
   const totalClicks = links.reduce((acc, l) => acc + (l.clicks || 0), 0);
 
   return (
-    <div className="min-h-screen bg-[#F2F4F6] text-[#191F28] font-sans antialiased py-8 px-4 sm:px-6 pb-20">
-      <div className="mx-auto max-w-lg space-y-5">
+    <div className="min-h-screen bg-[#F2F4F6] text-[#191F28] font-sans antialiased">
+      {/* 1. 상단 공통 헤더 (구글 소셜 로그인 / 사용자 정보 연동) */}
+      <Header />
 
-        {/* 상단: 대시보드 헤더 & 액션 버튼 */}
-        <header className="bg-white rounded-3xl p-6 border border-[#E5E8EB] shadow-xs space-y-4 text-center sm:text-left">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              {profile?.avatarUrl ? (
-                // eslint-disable-next-next/no-img-element
-                <img
-                  src={profile.avatarUrl}
-                  alt={profile.name}
-                  className="w-14 h-14 rounded-full object-cover border-2 border-[#5B5FC7]"
-                />
-              ) : (
-                <div className="w-14 h-14 rounded-full bg-[#5B5FC7] text-white flex items-center justify-center font-bold text-xl">
-                  {profile?.name ? profile.name.charAt(0) : 'M'}
+      <main className="py-8 px-4 sm:px-6 pb-24">
+        <div className="mx-auto max-w-lg space-y-5">
+
+          {/* 인증 로딩 상태 */}
+          {authLoading ? (
+            <div className="bg-white rounded-3xl p-10 border border-[#E5E8EB] shadow-xs text-center space-y-3">
+              <Loader2 className="w-8 h-8 animate-spin text-[#3182F6] mx-auto" />
+              <p className="text-sm font-semibold text-[#6B7684]">
+                로그인 및 사용자 정보를 확인하고 있어요...
+              </p>
+            </div>
+          ) : !user ? (
+            /* =========================================================================
+             * 2. [미로그인 화면]: 로그인 이후에 사용할 수 있도록 설명 문구 & 로그인 안내 페이지
+             * ========================================================================= */
+            <div className="space-y-4 animate-in fade-in duration-300">
+              {/* 메인 로그인 유도 히어로 카드 */}
+              <div className="bg-white rounded-3xl p-7 border border-[#E5E8EB] shadow-xs space-y-6 text-center">
+                <div className="w-16 h-16 rounded-2xl bg-[#E8F3FF] text-[#3182F6] flex items-center justify-center mx-auto shadow-xs">
+                  <Lock className="w-8 h-8" />
                 </div>
-              )}
-              <div>
-                <div className="flex items-center gap-2 justify-center sm:justify-start">
-                  <h1 className="text-xl font-bold tracking-tight text-[#191F28]">
-                    {profile?.name || '마이링크'}
+
+                <div className="space-y-2">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-[#E8F3FF] text-[#3182F6]">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    로그인이 필요한 서비스예요
+                  </span>
+                  <h1 className="text-2xl font-extrabold text-[#191F28] tracking-tight">
+                    나만의 개인화 링크를 시작해 보세요
                   </h1>
-                  <span className="text-xs bg-[#F0F0FF] text-[#5B5FC7] font-semibold px-2 py-0.5 rounded-full border border-[#DCDCFB]">
-                    @{profile?.username || username}
-                  </span>
+                  <p className="text-sm text-[#4E5968] leading-relaxed max-w-sm mx-auto">
+                    마이링크는 Google 소셜 로그인 후 사용자의 고유 계정 경로인{' '}
+                    <span className="font-mono font-bold text-[#3182F6] bg-[#E8F3FF] px-1.5 py-0.5 rounded">
+                      users/{'{user.uid}'}/links
+                    </span>
+                    에 개인화된 링크 데이터를 안전하게 저장하고 관리해요.
+                  </p>
                 </div>
-                <p className="text-xs text-[#6B7684] line-clamp-1 mt-0.5">
-                  {profile?.bio || '개인 링크 인 바이오 서비스'}
-                </p>
+
+                {/* Google 소셜 로그인 액션 버튼 */}
+                <div className="pt-2">
+                  <button
+                    onClick={() => login()}
+                    disabled={isLoggingIn}
+                    className="w-full h-14 bg-[#191F28] hover:bg-[#333D4B] active:scale-[0.98] text-white font-bold text-[16px] rounded-2xl transition-all shadow-md flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60"
+                  >
+                    {isLoggingIn ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin text-white" />
+                        <span>Google 로그인 진행 중...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5 flex-shrink-0" viewBox="0 0 24 24">
+                          <path
+                            fill="#4285F4"
+                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                          />
+                          <path
+                            fill="#EA4335"
+                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                          />
+                        </svg>
+                        <span>Google 계정으로 3초 만에 시작하기</span>
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[12px] text-[#8B95A1] mt-2.5">
+                    별도의 회원가입 절차 없이 즉시 무료로 이용할 수 있어요.
+                  </p>
+                </div>
               </div>
-            </div>
 
-            {/* 공개 미리보기 버튼 */}
-            <Link
-              href={`/${profile?.username || username}`}
-              target="_blank"
-              className="w-full sm:w-auto px-4 py-2.5 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm"
-            >
-              <Eye className="w-4 h-4" />
-              <span>공개 보기 (/{profile?.username || username})</span>
-              <ExternalLink className="w-3.5 h-3.5" />
-            </Link>
-          </div>
+              {/* 기능 상세 안내 카드 3종 */}
+              <div className="bg-white rounded-3xl p-6 border border-[#E5E8EB] shadow-xs space-y-4">
+                <h3 className="text-sm font-bold text-[#191F28] flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#3182F6]" />
+                  <span>로그인 후 이용할 수 있는 주요 기능</span>
+                </h3>
 
-          {/* 대시보드 컨트롤 바 (다이얼로그 버튼 모음) */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-[#E5E8EB]">
-            {/* 1. 프로필 & 테마 수정 다이얼로그 */}
-            <button
-              onClick={handleOpenProfileDialog}
-              className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Palette className="w-3.5 h-3.5" />
-              <span>프로필·테마</span>
-            </button>
-
-            {/* 2. 소셜 아이콘 관리 다이얼로그 */}
-            <button
-              onClick={() => {
-                socialForm.reset({ platform: 'instagram', url: '' });
-                setIsSocialsDialogOpen(true);
-              }}
-              className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              <span>소셜 링크({socials.length})</span>
-            </button>
-
-            {/* 3. 통계 분석 다이얼로그 */}
-            <button
-              onClick={() => setIsAnalyticsDialogOpen(true)}
-              className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <BarChart3 className="w-3.5 h-3.5 text-[#3182F6]" />
-              <span>통계 ({totalClicks}클릭)</span>
-            </button>
-
-            {/* 4. 프로필/페르소나 스위처 다이얼로그 */}
-            <button
-              onClick={() => {
-                usernameForm.reset({ username: '' });
-                setIsSwitcherDialogOpen(true);
-              }}
-              className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Users className="w-3.5 h-3.5" />
-              <span>프로필 전환</span>
-            </button>
-          </div>
-        </header>
-
-        {/* 링크 & 헤더 블록 섹션 */}
-        <section className="bg-white rounded-3xl p-6 border border-[#E5E8EB] shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-[#191F28] flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-[#5B5FC7]" />
-                  <span>링크 & 헤더 블록</span>
-                </h2>
-                {/* 실시간 동기화 상태 뱃지 */}
-                {syncStatus === 'syncing' && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E8F3FF] text-[#3182F6] animate-pulse">
-                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                    <span>동기화 중...</span>
-                  </span>
-                )}
-                {syncStatus === 'synced' && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E8F8EE] text-[#00A854]">
-                    <Check className="w-2.5 h-2.5" />
-                    <span>Firestore 동기화됨</span>
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-[#8B95A1] mt-0.5">버튼을 눌러 다이얼로그 폼으로 새 블록을 추가하세요.</p>
-            </div>
-
-            {/* 다이얼로그 트리거: 링크 추가 */}
-            <button
-              onClick={() => {
-                addBlockForm.reset({ blockType: 'link', title: '', url: '', icon: 'Globe', isActive: true });
-                setIsAddDialogOpen(true);
-              }}
-              className="h-10 px-4 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>블록 추가</span>
-            </button>
-          </div>
-
-          {/* 블록 목록 / 로딩 스켈레톤 */}
-          {isLoadingLinks ? (
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-center gap-2 py-2 text-xs text-[#8B95A1]">
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#5B5FC7]" />
-                <span>Firestore에서 최신 링크 목록을 불러오는 중...</span>
-              </div>
-              {[1, 2, 3].map((item) => (
-                <div
-                  key={item}
-                  className="bg-[#F9FAFB] rounded-2xl p-3.5 border border-[#E5E8EB] flex items-center justify-between gap-3 animate-pulse"
-                >
-                  <div className="w-6 h-12 bg-[#E5E8EB] rounded-lg" />
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-9 h-9 rounded-xl bg-[#E5E8EB]" />
-                    <div className="space-y-1.5 flex-1">
-                      <div className="h-4 bg-[#E5E8EB] rounded w-2/5" />
-                      <div className="h-3 bg-[#E5E8EB] rounded w-3/5" />
+                <div className="space-y-3">
+                  {/* 기능 1 */}
+                  <div className="p-3.5 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-[#E8F3FF] text-[#3182F6] flex items-center justify-center font-bold flex-shrink-0 mt-0.5">
+                      <Database className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#191F28]">
+                        개인화된 Firestore 클라우드 저장
+                      </h4>
+                      <p className="text-xs text-[#6B7684] mt-0.5 leading-relaxed">
+                        사용자별 고유 UID를 통해 <code className="text-[#3182F6] font-semibold">users/{'{uid}'}/links</code>에 링크가 안전하게 저장되고 기기 간 실시간 동기화돼요.
+                      </p>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <div className="w-7 h-7 bg-[#E5E8EB] rounded-lg" />
-                    <div className="w-7 h-7 bg-[#E5E8EB] rounded-lg" />
+
+                  {/* 기능 2 */}
+                  <div className="p-3.5 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-[#F0F0FF] text-[#5B5FC7] flex items-center justify-center font-bold flex-shrink-0 mt-0.5">
+                      <Layers className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#191F28]">
+                        다양한 블록 CRUD 및 테마 커스텀
+                      </h4>
+                      <p className="text-xs text-[#6B7684] mt-0.5 leading-relaxed">
+                        웹사이트 링크, 섹션 구분 헤더, 소셜 매체 아이콘을 다이얼로그 모달로 직관적으로 관리할 수 있어요.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 기능 3 */}
+                  <div className="p-3.5 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-[#E8F8EE] text-[#20874E] flex items-center justify-center font-bold flex-shrink-0 mt-0.5">
+                      <BarChart3 className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#191F28]">
+                        실시간 방문자 및 클릭수 애널리틱스
+                      </h4>
+                      <p className="text-xs text-[#6B7684] mt-0.5 leading-relaxed">
+                        공개 프로필의 총 누적 PV 및 링크별 개별 클릭 수를 실시간 차트와 퍼센트 바로 확인할 수 있어요.
+                      </p>
+                    </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : links.length === 0 ? (
-            <div className="bg-[#F9FAFB] rounded-2xl p-8 text-center text-[#8B95A1] text-sm border border-dashed border-[#E5E8EB]">
-              등록된 블록이 없습니다. 위의 &apos;블록 추가&apos; 버튼을 눌러 새 블록을 만들어 보세요!
+
+                {/* 시연용 프로필 둘러보기 링크 */}
+                <div className="pt-2 border-t border-[#F2F4F6] text-center">
+                  <Link
+                    href="/links"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-[#3182F6] hover:underline py-1"
+                  >
+                    <span>로그인 전 시연용 샘플 프로필 둘러보기</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+              </div>
             </div>
           ) : (
-            <div className="space-y-2.5">
-              {links.map((link, idx) => (
-                <React.Fragment key={link.id}>
-                  {editingLinkId === link.id ? (
-                    /* 인라인 편집 UI (동일한 Zod 검증 및 Firebase 연동) */
-                    <form
-                      onSubmit={editBlockForm.handleSubmit(onEditBlockSubmit)}
-                      className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-[#5B5FC7] shadow-md space-y-4 transition-all animate-in fade-in duration-200"
+            /* =========================================================================
+             * 3. [로그인 완료 화면]: users/{user.uid}/links 개인화된 링크 관리 대시보드
+             * ========================================================================= */
+            <div className="space-y-5 animate-in fade-in duration-300">
+
+              {/* 3.1 개인화된 Firestore 유저 정보 카드 (경로 및 프로필 상세 표시) */}
+              <div className="bg-white rounded-3xl p-5 border border-[#E5E8EB] shadow-xs space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[#F2F4F6]">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#20874E] animate-pulse" />
+                    <span className="text-xs font-bold text-[#191F28]">
+                      개인화된 Firestore 계정 연결됨
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-semibold text-[#8B95A1]">
+                    Google 소셜 인증
+                  </span>
+                </div>
+
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {user.photoURL ? (
+                      // eslint-disable-next-next/no-img-element
+                      <img
+                        src={user.photoURL}
+                        alt={user.displayName || '프로필'}
+                        className="w-14 h-14 rounded-2xl object-cover border-2 border-[#3182F6] shadow-xs flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-2xl bg-[#3182F6] text-white flex items-center justify-center font-bold text-xl shadow-xs flex-shrink-0">
+                        {user.displayName ? user.displayName.charAt(0) : 'U'}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-[#191F28] truncate">
+                          {user.displayName || '구글 사용자'}
+                        </h2>
+                        <span className="text-[10px] bg-[#E8F3FF] text-[#3182F6] font-bold px-2 py-0.5 rounded-full flex-shrink-0">
+                          인증 완료
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#6B7684] truncate">{user.email}</p>
+                      <p className="text-[11px] text-[#8B95A1] font-mono mt-0.5 truncate">
+                        UID: {user.uid}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 로그아웃 버튼 */}
+                  <button
+                    onClick={() => logout()}
+                    className="p-2 text-[#8B95A1] hover:text-[#F04452] hover:bg-[#FFF0F0] rounded-xl transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer flex-shrink-0"
+                    title="로그아웃"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span className="hidden sm:inline">로그아웃</span>
+                  </button>
+                </div>
+
+                {/* Firestore 컬렉션 경로 표시 배너 */}
+                <div className="p-3 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-[#4E5968] flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-[#3182F6]" />
+                      <span>개인화 저장 경로</span>
+                    </span>
+                    <span className="text-[10px] text-[#8B95A1]">실시간 동기화 (onSnapshot)</span>
+                  </div>
+                  <div className="flex items-center justify-between bg-white px-3 py-2 rounded-xl border border-[#E5E8EB] gap-2">
+                    <span className="font-mono text-xs text-[#3182F6] font-semibold truncate">
+                      users/{user.uid}/links
+                    </span>
+                    <button
+                      onClick={handleCopyFirestorePath}
+                      className="text-xs text-[#4E5968] hover:text-[#3182F6] flex items-center gap-1 font-semibold flex-shrink-0 cursor-pointer"
+                      title="경로 복사"
                     >
-                      {/* 상단 인라인 편집 헤더 배너 */}
-                      <div className="flex items-center justify-between pb-2 border-b border-[#F2F4F6]">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-[#5B5FC7]">
-                          <Pencil className="w-3.5 h-3.5" />
-                          <span>블록 인라인 편집</span>
+                      {copiedPath ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-[#20874E]" />
+                          <span className="text-[#20874E] text-[11px]">복사됨</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span className="text-[11px]">복사</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 통계 요약 칩 */}
+                <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                  <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
+                    <div className="text-[10px] text-[#8B95A1]">등록 링크</div>
+                    <div className="text-sm font-bold text-[#3182F6] tabular-nums">
+                      {links.length}개
+                    </div>
+                  </div>
+                  <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
+                    <div className="text-[10px] text-[#8B95A1]">누적 클릭수</div>
+                    <div className="text-sm font-bold text-[#191F28] tabular-nums">
+                      {totalClicks}회
+                    </div>
+                  </div>
+                  <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
+                    <div className="text-[10px] text-[#8B95A1]">총 방문수(PV)</div>
+                    <div className="text-sm font-bold text-[#191F28] tabular-nums">
+                      {totalPageViews}회
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3.2 대시보드 프로필 헤더 & 액션 버튼 */}
+              <header className="bg-white rounded-3xl p-6 border border-[#E5E8EB] shadow-xs space-y-4 text-center sm:text-left">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    {profile?.avatarUrl ? (
+                      // eslint-disable-next-next/no-img-element
+                      <img
+                        src={profile.avatarUrl}
+                        alt={profile.name}
+                        className="w-14 h-14 rounded-full object-cover border-2 border-[#5B5FC7]"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-full bg-[#5B5FC7] text-white flex items-center justify-center font-bold text-xl">
+                        {profile?.name ? profile.name.charAt(0) : 'M'}
+                      </div>
+                    )}
+                    <div>
+                      <div className="flex items-center gap-2 justify-center sm:justify-start">
+                        <h1 className="text-xl font-bold tracking-tight text-[#191F28]">
+                          {profile?.name || user.displayName || '마이링크'}
+                        </h1>
+                        <span className="text-xs bg-[#F0F0FF] text-[#5B5FC7] font-semibold px-2 py-0.5 rounded-full border border-[#DCDCFB]">
+                          @{profile?.username || username}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#6B7684] line-clamp-1 mt-0.5">
+                        {profile?.bio || '개인 링크 인 바이오 서비스'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* 공개 미리보기 버튼 */}
+                  <Link
+                    href={`/${profile?.username || username}`}
+                    target="_blank"
+                    className="w-full sm:w-auto px-4 py-2.5 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                  >
+                    <Eye className="w-4 h-4" />
+                    <span>공개 보기 (/{profile?.username || username})</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+
+                {/* 대시보드 컨트롤 바 (다이얼로그 버튼 모음) */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-[#E5E8EB]">
+                  {/* 1. 프로필 & 테마 수정 다이얼로그 */}
+                  <button
+                    onClick={handleOpenProfileDialog}
+                    className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Palette className="w-3.5 h-3.5" />
+                    <span>프로필·테마</span>
+                  </button>
+
+                  {/* 2. 소셜 아이콘 관리 다이얼로그 */}
+                  <button
+                    onClick={() => {
+                      socialForm.reset({ platform: 'instagram', url: '' });
+                      setIsSocialsDialogOpen(true);
+                    }}
+                    className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span>소셜 링크({socials.length})</span>
+                  </button>
+
+                  {/* 3. 통계 분석 다이얼로그 */}
+                  <button
+                    onClick={() => setIsAnalyticsDialogOpen(true)}
+                    className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <BarChart3 className="w-3.5 h-3.5 text-[#3182F6]" />
+                    <span>통계 ({totalClicks}클릭)</span>
+                  </button>
+
+                  {/* 4. 프로필/페르소나 스위처 다이얼로그 */}
+                  <button
+                    onClick={() => {
+                      usernameForm.reset({ username: '' });
+                      setIsSwitcherDialogOpen(true);
+                    }}
+                    className="p-2.5 rounded-xl border border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F0F0FF] hover:border-[#5B5FC7] text-[#191F28] hover:text-[#5B5FC7] text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span>프로필 전환</span>
+                  </button>
+                </div>
+              </header>
+
+              {/* 3.3 링크 & 헤더 블록 섹션 (Firestore users/{user.uid}/links) */}
+              <section className="bg-white rounded-3xl p-6 border border-[#E5E8EB] shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-bold text-[#191F28] flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-[#5B5FC7]" />
+                        <span>링크 & 헤더 블록</span>
+                      </h2>
+                      {/* 실시간 동기화 상태 뱃지 */}
+                      {syncStatus === 'syncing' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E8F3FF] text-[#3182F6] animate-pulse">
+                          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                          <span>동기화 중...</span>
+                        </span>
+                      )}
+                      {syncStatus === 'synced' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#E8F8EE] text-[#00A854]">
+                          <Check className="w-2.5 h-2.5" />
+                          <span>Firestore 동기화됨</span>
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-[#8B95A1] mt-0.5">
+                      Firestore <code className="font-mono text-[#3182F6]">users/{user.uid.slice(0, 6)}.../links</code>에 안전하게 보관돼요.
+                    </p>
+                  </div>
+
+                  {/* 다이얼로그 트리거: 링크 추가 */}
+                  <button
+                    onClick={() => {
+                      addBlockForm.reset({ blockType: 'link', title: '', url: '', icon: 'Globe', isActive: true });
+                      setIsAddDialogOpen(true);
+                    }}
+                    className="h-10 px-4 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>블록 추가</span>
+                  </button>
+                </div>
+
+                {/* 블록 목록 / 로딩 스켈레톤 */}
+                {isLoadingLinks ? (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-center gap-2 py-4 text-xs text-[#8B95A1]">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[#5B5FC7]" />
+                      <span>Firestore에서 개인화된 링크 목록을 불러오는 중...</span>
+                    </div>
+                    {[1, 2, 3].map((item) => (
+                      <div
+                        key={item}
+                        className="bg-[#F9FAFB] rounded-2xl p-3.5 border border-[#E5E8EB] flex items-center justify-between gap-3 animate-pulse"
+                      >
+                        <div className="w-6 h-12 bg-[#E5E8EB] rounded-lg" />
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className="w-9 h-9 rounded-xl bg-[#E5E8EB]" />
+                          <div className="space-y-1.5 flex-1">
+                            <div className="h-4 bg-[#E5E8EB] rounded w-2/5" />
+                            <div className="h-3 bg-[#E5E8EB] rounded w-3/5" />
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 text-[10px] text-[#8B95A1]">
-                          {link.updatedAt && (
-                            <span className="flex items-center gap-1" title={`수정 일시: ${new Date(link.updatedAt).toLocaleString('ko-KR')}`}>
-                              <Clock className="w-2.5 h-2.5" />
-                              <span>수정: {formatUpdatedAt(link.updatedAt)}</span>
-                            </span>
-                          )}
-                          <span className="font-mono">ID: {link.id}</span>
+                        <div className="flex gap-2">
+                          <div className="w-7 h-7 bg-[#E5E8EB] rounded-lg" />
+                          <div className="w-7 h-7 bg-[#E5E8EB] rounded-lg" />
                         </div>
                       </div>
+                    ))}
+                  </div>
+                ) : links.length === 0 ? (
+                  <div className="bg-[#F9FAFB] rounded-2xl p-8 text-center text-[#8B95A1] text-sm border border-dashed border-[#E5E8EB] space-y-2">
+                    <div className="text-2xl">✨</div>
+                    <p className="font-semibold text-[#191F28]">등록된 링크 블록이 없어요</p>
+                    <p className="text-xs text-[#8B95A1]">
+                      위의 &apos;블록 추가&apos; 버튼을 눌러 나만의 첫 링크를 등록해 보세요!
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {links.map((link, idx) => (
+                      <React.Fragment key={link.id}>
+                        {editingLinkId === link.id ? (
+                          /* 인라인 편집 UI (동일한 Zod 검증 및 Firebase 연동) */
+                          <form
+                            onSubmit={editBlockForm.handleSubmit(onEditBlockSubmit)}
+                            className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-[#5B5FC7] shadow-md space-y-4 transition-all animate-in fade-in duration-200"
+                          >
+                            {/* 상단 인라인 편집 헤더 배너 */}
+                            <div className="flex items-center justify-between pb-2 border-b border-[#F2F4F6]">
+                              <div className="flex items-center gap-1.5 text-xs font-bold text-[#5B5FC7]">
+                                <Pencil className="w-3.5 h-3.5" />
+                                <span>블록 인라인 편집</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-[10px] text-[#8B95A1]">
+                                {link.updatedAt && (
+                                  <span className="flex items-center gap-1" title={`수정 일시: ${new Date(link.updatedAt).toLocaleString('ko-KR')}`}>
+                                    <Clock className="w-2.5 h-2.5" />
+                                    <span>수정: {formatUpdatedAt(link.updatedAt)}</span>
+                                  </span>
+                                )}
+                                <span className="font-mono">ID: {link.id}</span>
+                              </div>
+                            </div>
 
-                      {/* 블록 타입 (웹사이트 링크 vs 섹션 헤더) */}
-                      <div className="flex rounded-xl bg-[#F2F4F6] p-1 gap-1">
-                        <button
-                          type="button"
-                          onClick={() => editBlockForm.setValue('blockType', 'link')}
-                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                            editBlockForm.watch('blockType') === 'link'
-                              ? 'bg-white text-[#5B5FC7] shadow-xs'
-                              : 'text-[#6B7684] hover:text-[#191F28]'
-                          }`}
-                        >
-                          <LinkIcon className="w-3.5 h-3.5" />
-                          <span>웹사이트 링크</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => editBlockForm.setValue('blockType', 'header')}
-                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                            editBlockForm.watch('blockType') === 'header'
-                              ? 'bg-white text-[#5B5FC7] shadow-xs'
-                              : 'text-[#6B7684] hover:text-[#191F28]'
-                          }`}
-                        >
-                          <Heading className="w-3.5 h-3.5" />
-                          <span>섹션 헤더</span>
-                        </button>
-                      </div>
+                            {/* 블록 타입 (웹사이트 링크 vs 섹션 헤더) */}
+                            <div className="flex rounded-xl bg-[#F2F4F6] p-1 gap-1">
+                              <button
+                                type="button"
+                                onClick={() => editBlockForm.setValue('blockType', 'link')}
+                                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                                  editBlockForm.watch('blockType') === 'link'
+                                    ? 'bg-white text-[#5B5FC7] shadow-xs'
+                                    : 'text-[#6B7684] hover:text-[#191F28]'
+                                }`}
+                              >
+                                <LinkIcon className="w-3.5 h-3.5" />
+                                <span>웹사이트 링크</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => editBlockForm.setValue('blockType', 'header')}
+                                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                                  editBlockForm.watch('blockType') === 'header'
+                                    ? 'bg-white text-[#5B5FC7] shadow-xs'
+                                    : 'text-[#6B7684] hover:text-[#191F28]'
+                                }`}
+                              >
+                                <Heading className="w-3.5 h-3.5" />
+                                <span>섹션 헤더</span>
+                              </button>
+                            </div>
 
-                      {/* 제목 입력 필드 */}
-                      <div className="flex flex-col gap-1.5">
-                        <div className="flex justify-between items-center">
-                          <label htmlFor={`edit-inline-title-${link.id}`} className="text-xs font-bold text-[#333D4B]">
-                            제목 <span className="text-[#5B5FC7]">*</span>
-                          </label>
-                          <span className="text-[10px] text-[#8B95A1]">
-                            {editBlockForm.watch('title')?.length || 0}/50자
-                          </span>
-                        </div>
-                        <input
-                          id={`edit-inline-title-${link.id}`}
-                          type="text"
-                          placeholder={editBlockForm.watch('blockType') === 'link' ? '예: 유튜브 채널 바로가기' : '예: 📌 주요 소셜 매체'}
-                          {...editBlockForm.register('title')}
-                          className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
-                            editBlockForm.formState.errors.title
-                              ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
-                              : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
-                          }`}
-                        />
-                        {editBlockForm.formState.errors.title && (
-                          <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
-                            <AlertCircle className="w-3.5 h-3.5" />
-                            <span>{editBlockForm.formState.errors.title.message}</span>
+                            {/* 제목 입력 필드 */}
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex justify-between items-center">
+                                <label htmlFor={`edit-inline-title-${link.id}`} className="text-xs font-bold text-[#333D4B]">
+                                  제목 <span className="text-[#5B5FC7]">*</span>
+                                </label>
+                                <span className="text-[10px] text-[#8B95A1]">
+                                  {editBlockForm.watch('title')?.length || 0}/50자
+                                </span>
+                              </div>
+                              <input
+                                id={`edit-inline-title-${link.id}`}
+                                type="text"
+                                placeholder={editBlockForm.watch('blockType') === 'link' ? '예: 유튜브 채널 바로가기' : '예: 📌 주요 소셜 매체'}
+                                {...editBlockForm.register('title')}
+                                className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
+                                  editBlockForm.formState.errors.title
+                                    ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
+                                    : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
+                                }`}
+                              />
+                              {editBlockForm.formState.errors.title && (
+                                <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  <span>{editBlockForm.formState.errors.title.message}</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* URL 필드 (링크 블록일 때만 노출) */}
+                            {editBlockForm.watch('blockType') === 'link' && (
+                              <div className="flex flex-col gap-1.5">
+                                <label htmlFor={`edit-inline-url-${link.id}`} className="text-xs font-bold text-[#333D4B]">
+                                  웹사이트 URL 주소 <span className="text-[#5B5FC7]">*</span>
+                                </label>
+                                <input
+                                  id={`edit-inline-url-${link.id}`}
+                                  type="text"
+                                  placeholder="예: https://youtube.com/@mychannel"
+                                  {...editBlockForm.register('url')}
+                                  className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
+                                    editBlockForm.formState.errors.url
+                                      ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
+                                      : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
+                                  }`}
+                                />
+                                {editBlockForm.formState.errors.url && (
+                                  <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                    <span>{editBlockForm.formState.errors.url.message}</span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {/* 아이콘 선택 (링크 블록일 때만 노출) */}
+                            {editBlockForm.watch('blockType') === 'link' && (
+                              <div className="flex flex-col gap-1.5">
+                                <label className="text-xs font-bold text-[#333D4B]">아이콘 선택</label>
+                                <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
+                                  {ICON_OPTIONS.map((opt) => {
+                                    const IconComp = opt.icon;
+                                    const isSelected = editBlockForm.watch('icon') === opt.value;
+                                    return (
+                                      <button
+                                        key={opt.value}
+                                        type="button"
+                                        onClick={() => editBlockForm.setValue('icon', opt.value)}
+                                        className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all text-xs gap-1 cursor-pointer ${
+                                          isSelected
+                                            ? 'border-[#5B5FC7] bg-[#F0F0FF] text-[#5B5FC7] font-bold'
+                                            : 'border-[#E5E8EB] bg-[#F9FAFB] text-[#6B7684] hover:bg-[#F2F4F6]'
+                                        }`}
+                                      >
+                                        <IconComp className="w-4 h-4" />
+                                        <span className="text-[10px] truncate max-w-full">{opt.label}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 공개 상태 토글 */}
+                            <div className="flex items-center justify-between p-3 rounded-xl bg-[#F9FAFB] border border-[#E5E8EB]">
+                              <div>
+                                <div className="text-xs font-bold text-[#191F28]">공개 상태로 설정</div>
+                                <div className="text-[11px] text-[#8B95A1]">체크 해제 시 공개 프로필에서 숨겨집니다</div>
+                              </div>
+                              <input
+                                type="checkbox"
+                                checked={editBlockForm.watch('isActive')}
+                                onChange={(e) => editBlockForm.setValue('isActive', e.target.checked)}
+                                className="w-4 h-4 accent-[#5B5FC7] cursor-pointer"
+                              />
+                            </div>
+
+                            {/* 하단 인라인 액션 버튼 */}
+                            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#F2F4F6]">
+                              <button
+                                type="button"
+                                onClick={handleCancelInlineEdit}
+                                disabled={isUpdatingBlock}
+                                className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer disabled:opacity-50"
+                              >
+                                취소
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={isUpdatingBlock}
+                                className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                              >
+                                {isUpdatingBlock ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>저장 중...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Check className="w-3.5 h-3.5" />
+                                    <span>저장하기</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          /* 일반 카드 뷰: 상시 표시되는 수정/삭제 버튼 제공 */
+                          <div
+                            className={`bg-white rounded-2xl p-3.5 sm:p-4 border flex items-center justify-between gap-3 shadow-xs transition-all ${
+                              link.isActive ? 'border-[#E5E8EB] hover:border-[#B0B8C1]' : 'border-[#E5E8EB] opacity-60 bg-[#F9FAFB]'
+                            }`}
+                          >
+                            {/* 순서 이동 버튼 (Up / Down) */}
+                            <div className="flex flex-col gap-0.5 flex-shrink-0">
+                              <button
+                                onClick={() => handleMoveLink(idx, 'up')}
+                                disabled={idx === 0}
+                                className="p-1 text-[#8B95A1] hover:text-[#5B5FC7] disabled:opacity-20 transition-colors cursor-pointer"
+                                title="위로 이동"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleMoveLink(idx, 'down')}
+                                disabled={idx === links.length - 1}
+                                className="p-1 text-[#8B95A1] hover:text-[#5B5FC7] disabled:opacity-20 transition-colors cursor-pointer"
+                                title="아래로 이동"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {/* 블록 정보 */}
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div
+                                className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                                  link.isHeader
+                                    ? 'bg-[#E8F3FF] text-[#3182F6]'
+                                    : 'bg-[#F0F0FF] text-[#5B5FC7]'
+                                }`}
+                              >
+                                {link.isHeader ? <Heading className="w-4 h-4" /> : <LinkIcon className="w-4 h-4" />}
+                              </div>
+
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <h4 className="font-bold text-[14px] text-[#191F28] truncate">
+                                    {link.title}
+                                  </h4>
+                                  {link.isHeader && (
+                                    <span className="text-[10px] font-semibold bg-[#E8F3FF] text-[#3182F6] px-1.5 py-0.5 rounded flex-shrink-0">
+                                      헤더
+                                    </span>
+                                  )}
+                                  {!link.isActive && (
+                                    <span className="text-[10px] font-semibold bg-[#F2F4F6] text-[#8B95A1] px-1.5 py-0.5 rounded flex-shrink-0">
+                                      비활성
+                                    </span>
+                                  )}
+                                </div>
+                                {link.url ? (
+                                  <div className="flex items-center gap-2 text-xs text-[#8B95A1] truncate flex-wrap">
+                                    <span className="truncate max-w-[200px]">{link.url}</span>
+                                    {link.clicks !== undefined && (
+                                      <span className="text-[10px] text-[#3182F6] font-semibold bg-[#E8F3FF] px-1.5 py-0.2 rounded-full flex-shrink-0">
+                                        {link.clicks}클릭
+                                      </span>
+                                    )}
+                                    {link.updatedAt && (
+                                      <span
+                                        className="inline-flex items-center gap-1 text-[10px] text-[#8B95A1] bg-[#F2F4F6] px-1.5 py-0.5 rounded-md flex-shrink-0 font-medium"
+                                        title={`수정 일시: ${new Date(link.updatedAt).toLocaleString('ko-KR')}`}
+                                      >
+                                        <Clock className="w-2.5 h-2.5 text-[#8B95A1]" />
+                                        <span>수정 {formatUpdatedAt(link.updatedAt)}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 text-xs text-[#8B95A1] flex-wrap">
+                                    <span>섹션 구분 헤더</span>
+                                    {link.updatedAt && (
+                                      <span
+                                        className="inline-flex items-center gap-1 text-[10px] text-[#8B95A1] bg-[#F2F4F6] px-1.5 py-0.5 rounded-md flex-shrink-0 font-medium"
+                                        title={`수정 일시: ${new Date(link.updatedAt).toLocaleString('ko-KR')}`}
+                                      >
+                                        <Clock className="w-2.5 h-2.5 text-[#8B95A1]" />
+                                        <span>수정 {formatUpdatedAt(link.updatedAt)}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 블록 액션 버튼들 (수정, 활성화 토글, 삭제) */}
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {/* 1. 인라인 수정 버튼 */}
+                              <button
+                                type="button"
+                                onClick={() => handleStartInlineEdit(link)}
+                                className="h-8 px-2.5 rounded-lg border border-[#DCDCFB] bg-[#F0F0FF] hover:bg-[#E2E2FF] text-[#5B5FC7] text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                title="인라인 수정"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                                <span>수정</span>
+                              </button>
+
+                              {/* 2. 활성화 토글 버튼 */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleActive(link.id)}
+                                className={`h-8 px-2 rounded-lg border text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                                  link.isActive
+                                    ? 'border-[#C8E6C9] bg-[#E8F7EE] text-[#20874E] hover:bg-[#D7F0E0]'
+                                    : 'border-[#E5E8EB] bg-[#F2F4F6] text-[#8B95A1] hover:bg-[#E5E8EB]'
+                                }`}
+                                title={link.isActive ? '비활성화하기' : '활성화하기'}
+                              >
+                                {link.isActive ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                              </button>
+
+                              {/* 3. 삭제 버튼 */}
+                              <button
+                                type="button"
+                                onClick={() => setDeletingLink(link)}
+                                className="h-8 px-2.5 rounded-lg border border-[#FFD0DE] bg-[#FFF0F5] hover:bg-[#FFE0EB] text-[#E90064] text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                title="링크 삭제"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>삭제</span>
+                              </button>
+                            </div>
                           </div>
                         )}
-                      </div>
-
-                      {/* URL 필드 (링크 블록일 때만 노출) */}
-                      {editBlockForm.watch('blockType') === 'link' && (
-                        <div className="flex flex-col gap-1.5">
-                          <label htmlFor={`edit-inline-url-${link.id}`} className="text-xs font-bold text-[#333D4B]">
-                            웹사이트 URL 주소 <span className="text-[#5B5FC7]">*</span>
-                          </label>
-                          <input
-                            id={`edit-inline-url-${link.id}`}
-                            type="text"
-                            placeholder="예: https://youtube.com/@mychannel"
-                            {...editBlockForm.register('url')}
-                            className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
-                              editBlockForm.formState.errors.url
-                                ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
-                                : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
-                            }`}
-                          />
-                          {editBlockForm.formState.errors.url && (
-                            <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
-                              <AlertCircle className="w-3.5 h-3.5" />
-                              <span>{editBlockForm.formState.errors.url.message}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* 아이콘 선택 (링크 블록일 때만 노출) */}
-                      {editBlockForm.watch('blockType') === 'link' && (
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-xs font-bold text-[#333D4B]">아이콘 선택</label>
-                          <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
-                            {ICON_OPTIONS.map((opt) => {
-                              const IconComp = opt.icon;
-                              const isSelected = editBlockForm.watch('icon') === opt.value;
-                              return (
-                                <button
-                                  key={opt.value}
-                                  type="button"
-                                  onClick={() => editBlockForm.setValue('icon', opt.value)}
-                                  className={`flex flex-col items-center justify-center p-2 rounded-xl border transition-all text-xs gap-1 cursor-pointer ${
-                                    isSelected
-                                      ? 'border-[#5B5FC7] bg-[#F0F0FF] text-[#5B5FC7] font-bold'
-                                      : 'border-[#E5E8EB] bg-[#F9FAFB] text-[#6B7684] hover:bg-[#F2F4F6]'
-                                  }`}
-                                >
-                                  <IconComp className="w-4 h-4" />
-                                  <span className="text-[10px] truncate max-w-full">{opt.label}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* 공개 상태 토글 */}
-                      <div className="flex items-center justify-between p-3 rounded-xl bg-[#F9FAFB] border border-[#E5E8EB]">
-                        <div>
-                          <div className="text-xs font-bold text-[#191F28]">공개 상태로 설정</div>
-                          <div className="text-[11px] text-[#8B95A1]">체크 해제 시 공개 프로필에서 숨겨집니다</div>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={editBlockForm.watch('isActive')}
-                          onChange={(e) => editBlockForm.setValue('isActive', e.target.checked)}
-                          className="w-4 h-4 accent-[#5B5FC7] cursor-pointer"
-                        />
-                      </div>
-
-                      {/* 하단 인라인 액션 버튼 */}
-                      <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#F2F4F6]">
-                        <button
-                          type="button"
-                          onClick={handleCancelInlineEdit}
-                          disabled={isUpdatingBlock}
-                          className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer disabled:opacity-50"
-                        >
-                          취소
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={isUpdatingBlock}
-                          className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-                        >
-                          {isUpdatingBlock ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>저장 중...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>저장하기</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    /* 일반 카드 뷰: 상시 표시되는 수정/삭제 버튼 제공 */
-                    <div
-                      className={`bg-white rounded-2xl p-3.5 sm:p-4 border flex items-center justify-between gap-3 shadow-xs transition-all ${
-                        link.isActive ? 'border-[#E5E8EB] hover:border-[#B0B8C1]' : 'border-[#E5E8EB] opacity-60 bg-[#F9FAFB]'
-                      }`}
-                    >
-                      {/* 순서 이동 버튼 (Up / Down) */}
-                      <div className="flex flex-col gap-0.5 flex-shrink-0">
-                        <button
-                          onClick={() => handleMoveLink(idx, 'up')}
-                          disabled={idx === 0}
-                          className="p-1 text-[#8B95A1] hover:text-[#5B5FC7] disabled:opacity-20 transition-colors cursor-pointer"
-                          title="위로 이동"
-                        >
-                          <ArrowUp className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleMoveLink(idx, 'down')}
-                          disabled={idx === links.length - 1}
-                          className="p-1 text-[#8B95A1] hover:text-[#5B5FC7] disabled:opacity-20 transition-colors cursor-pointer"
-                          title="아래로 이동"
-                        >
-                          <ArrowDown className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      {/* 블록 정보 */}
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                            link.isHeader
-                              ? 'bg-[#E8F3FF] text-[#3182F6]'
-                              : 'bg-[#F0F0FF] text-[#5B5FC7]'
-                          }`}
-                        >
-                          {link.isHeader ? <Heading className="w-4 h-4" /> : <LinkIcon className="w-4 h-4" />}
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-[14px] text-[#191F28] truncate">
-                              {link.title}
-                            </h4>
-                            {link.isHeader && (
-                              <span className="text-[10px] font-semibold bg-[#E8F3FF] text-[#3182F6] px-1.5 py-0.5 rounded flex-shrink-0">
-                                헤더
-                              </span>
-                            )}
-                            {!link.isActive && (
-                              <span className="text-[10px] font-semibold bg-[#F2F4F6] text-[#8B95A1] px-1.5 py-0.5 rounded flex-shrink-0">
-                                비활성
-                              </span>
-                            )}
-                          </div>
-                          {link.url ? (
-                            <div className="flex items-center gap-2 text-xs text-[#8B95A1] truncate flex-wrap">
-                              <span className="truncate max-w-[200px]">{link.url}</span>
-                              {link.clicks !== undefined && (
-                                <span className="text-[10px] text-[#3182F6] font-semibold bg-[#E8F3FF] px-1.5 py-0.2 rounded-full flex-shrink-0">
-                                  {link.clicks}클릭
-                                </span>
-                              )}
-                              {link.updatedAt && (
-                                <span
-                                  className="inline-flex items-center gap-1 text-[10px] text-[#8B95A1] bg-[#F2F4F6] px-1.5 py-0.5 rounded-md flex-shrink-0 font-medium"
-                                  title={`수정 일시: ${new Date(link.updatedAt).toLocaleString('ko-KR')}`}
-                                >
-                                  <Clock className="w-2.5 h-2.5 text-[#8B95A1]" />
-                                  <span>수정 {formatUpdatedAt(link.updatedAt)}</span>
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2 text-xs text-[#8B95A1] flex-wrap">
-                              <span>섹션 구분 헤더</span>
-                              {link.updatedAt && (
-                                <span
-                                  className="inline-flex items-center gap-1 text-[10px] text-[#8B95A1] bg-[#F2F4F6] px-1.5 py-0.5 rounded-md flex-shrink-0 font-medium"
-                                  title={`수정 일시: ${new Date(link.updatedAt).toLocaleString('ko-KR')}`}
-                                >
-                                  <Clock className="w-2.5 h-2.5 text-[#8B95A1]" />
-                                  <span>수정 {formatUpdatedAt(link.updatedAt)}</span>
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 블록 액션 버튼들 (수정, 활성화 토글, 삭제) - 항상 표시됨 */}
-                      <div className="flex items-center gap-1.5 flex-shrink-0">
-                        {/* 1. 인라인 수정 버튼 (항상 표시) */}
-                        <button
-                          type="button"
-                          onClick={() => handleStartInlineEdit(link)}
-                          className="h-8 px-2.5 rounded-lg border border-[#DCDCFB] bg-[#F0F0FF] hover:bg-[#E2E2FF] text-[#5B5FC7] text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                          title="인라인 수정"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                          <span>수정</span>
-                        </button>
-
-                        {/* 2. 활성화 토글 버튼 (항상 표시) */}
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(link.id)}
-                          className={`h-8 px-2 rounded-lg border text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
-                            link.isActive
-                              ? 'border-[#C8E6C9] bg-[#E8F7EE] text-[#20874E] hover:bg-[#D7F0E0]'
-                              : 'border-[#E5E8EB] bg-[#F2F4F6] text-[#8B95A1] hover:bg-[#E5E8EB]'
-                          }`}
-                          title={link.isActive ? '비활성화하기' : '활성화하기'}
-                        >
-                          {link.isActive ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                        </button>
-
-                        {/* 3. 삭제 버튼 (항상 표시, 확인 모달 트리거) */}
-                        <button
-                          type="button"
-                          onClick={() => setDeletingLink(link)}
-                          className="h-8 px-2.5 rounded-lg border border-[#FFD0DE] bg-[#FFF0F5] hover:bg-[#FFE0EB] text-[#E90064] text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                          title="링크 삭제"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>삭제</span>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </React.Fragment>
-              ))}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                )}
+              </section>
             </div>
           )}
-        </section>
+        </div>
 
         {/* --- 1. 새 링크/헤더 블록 추가 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isAddDialogOpen} onOpenChange={(open) => { if (!isSubmittingBlock) setIsAddDialogOpen(open); }}>
@@ -1005,7 +1327,7 @@ export default function MyPage() {
             <DialogHeader>
               <DialogTitle>새 링크/헤더 블록 추가</DialogTitle>
               <DialogDescription>
-                Zod 스키마 검증 기반으로 새로 노출할 웹사이트 링크 또는 구분선 헤더를 등록해 보세요.
+                개인화된 Firestore(users/{user?.uid ? user.uid.slice(0, 6) + '...' : 'uid'}/links)에 저장돼요.
               </DialogDescription>
             </DialogHeader>
 
@@ -1150,12 +1472,12 @@ export default function MyPage() {
                   {isSubmittingBlock ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>추가 중...</span>
+                      <span>저장 중...</span>
                     </>
                   ) : (
                     <>
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>추가하기</span>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>블록 추가하기</span>
                     </>
                   )}
                 </button>
@@ -1164,103 +1486,28 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- 2. 링크 삭제 확인 모달 (Delete Confirmation Dialog with Firebase) --- */}
-        <Dialog open={!!deletingLink} onOpenChange={(open) => { if (!open && !isDeletingInFirestore) setDeletingLink(null); }}>
-          <DialogContent className="max-w-md p-6 rounded-3xl bg-white border border-[#E5E8EB] shadow-xl">
-            <DialogHeader className="space-y-2">
-              <DialogTitle className="text-lg font-bold text-[#191F28] flex items-center gap-2">
-                <Trash2 className="w-5 h-5 text-[#E90064]" />
-                <span>정말 삭제하시겠습니까?</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-[#6B7684]">
-                선택하신 블록을 완전히 삭제합니다.
-              </DialogDescription>
-            </DialogHeader>
-
-            {/* 링크 이름 표시 */}
-            {deletingLink && (
-              <div className="my-2 p-3.5 bg-[#F9FAFB] rounded-2xl border border-[#E5E8EB] space-y-1">
-                <div className="text-[11px] font-semibold text-[#8B95A1]">삭제 대상 블록</div>
-                <div className="text-sm font-bold text-[#191F28] break-all">
-                  {deletingLink.title}
-                </div>
-                {deletingLink.url && (
-                  <div className="text-xs text-[#6B7684] truncate">
-                    {deletingLink.url}
-                  </div>
-                )}
-                {deletingLink.updatedAt && (
-                  <div className="text-[11px] text-[#8B95A1] flex items-center gap-1 pt-1 border-t border-[#F2F4F6] mt-1.5">
-                    <Clock className="w-3 h-3 text-[#8B95A1]" />
-                    <span>최근 수정: {new Date(deletingLink.updatedAt).toLocaleString('ko-KR')}</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* 경고: "이 작업은 되돌릴 수 없습니다" (빨간색) */}
-            <div className="text-xs font-bold text-[#E90064] flex items-center gap-1.5 py-1">
-              <AlertCircle className="w-4 h-4 text-[#E90064] shrink-0" />
-              <span>이 작업은 되돌릴 수 없습니다</span>
-            </div>
-
-            <DialogFooter className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDeletingLink(null)}
-                disabled={isDeletingInFirestore}
-                className="h-10 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer disabled:opacity-50"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDelete}
-                disabled={isDeletingInFirestore}
-                className="h-10 px-5 bg-[#E90064] hover:bg-[#D00058] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-60"
-              >
-                {isDeletingInFirestore ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>삭제 중...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>삭제하기</span>
-                  </>
-                )}
-              </button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* --- 3. 프로필 & 테마 설정 다이얼로그 (React Hook Form + Zod) --- */}
+        {/* --- 2. 프로필 & 테마 설정 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>프로필 정보 & 테마 스타일 설정</DialogTitle>
+              <DialogTitle>프로필 & 테마 설정</DialogTitle>
               <DialogDescription>
-                Zod 스키마 검증 기반으로 프로필 정보와 프리셋 테마를 커스텀해 보세요.
+                닉네임, 소개글, 아바타 및 테마와 버튼 스타일을 커스텀해 보세요.
               </DialogDescription>
             </DialogHeader>
 
-            <form onSubmit={profileForm.handleSubmit(onProfileSubmit)} className="flex flex-col gap-4 max-h-[70vh] overflow-y-auto pr-1">
-              {/* 이름 */}
+            <form onSubmit={profileForm.handleSubmit(onProfileSubmit)} className="flex flex-col gap-4">
+              {/* 닉네임 */}
               <div className="flex flex-col gap-1.5">
-                <div className="flex justify-between items-center">
-                  <label htmlFor="p-name" className="text-xs font-bold text-[#333D4B]">
-                    프로필 이름/닉네임 <span className="text-[#5B5FC7]">*</span>
-                  </label>
-                  <span className="text-[10px] text-[#8B95A1]">
-                    {profileForm.watch('name')?.length || 0}/30자
-                  </span>
-                </div>
+                <label htmlFor="profile-name" className="text-xs font-bold text-[#333D4B]">
+                  닉네임 / 표시 이름 <span className="text-[#5B5FC7]">*</span>
+                </label>
                 <input
-                  id="p-name"
+                  id="profile-name"
                   type="text"
+                  placeholder="예: 마이링크 크리에이터"
                   {...profileForm.register('name')}
-                  className={`w-full px-3.5 py-2 rounded-xl border text-sm focus:outline-none transition-all ${
+                  className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
                     profileForm.formState.errors.name
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
@@ -1276,19 +1523,15 @@ export default function MyPage() {
 
               {/* 한줄 소개 */}
               <div className="flex flex-col gap-1.5">
-                <div className="flex justify-between items-center">
-                  <label htmlFor="p-bio" className="text-xs font-bold text-[#333D4B]">
-                    한줄 소개 (Bio)
-                  </label>
-                  <span className="text-[10px] text-[#8B95A1]">
-                    {profileForm.watch('bio')?.length || 0}/150자
-                  </span>
-                </div>
+                <label htmlFor="profile-bio" className="text-xs font-bold text-[#333D4B]">
+                  한줄 소개 (Bio)
+                </label>
                 <textarea
-                  id="p-bio"
+                  id="profile-bio"
                   rows={2}
+                  placeholder="예: 디자인과 개발을 사랑하는 프론트엔드 엔지니어예요."
                   {...profileForm.register('bio')}
-                  className={`w-full px-3.5 py-2 rounded-xl border text-sm focus:outline-none transition-all ${
+                  className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
                     profileForm.formState.errors.bio
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
@@ -1304,15 +1547,15 @@ export default function MyPage() {
 
               {/* 아바타 이미지 URL */}
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="p-avatar" className="text-xs font-bold text-[#333D4B]">
+                <label htmlFor="profile-avatar" className="text-xs font-bold text-[#333D4B]">
                   프로필 아바타 이미지 URL
                 </label>
                 <input
-                  id="p-avatar"
+                  id="profile-avatar"
                   type="text"
-                  placeholder="https://images.unsplash.com/..."
+                  placeholder="예: https://images.unsplash.com/..."
                   {...profileForm.register('avatarUrl')}
-                  className={`w-full px-3.5 py-2 rounded-xl border text-sm focus:outline-none transition-all ${
+                  className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
                     profileForm.formState.errors.avatarUrl
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
                       : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
@@ -1326,12 +1569,10 @@ export default function MyPage() {
                 )}
               </div>
 
-              {/* 테마 프리셋 선택 (6종) */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-bold text-[#333D4B]">
-                  테마 프리셋 6종 (THEME-01)
-                </label>
-                <div className="grid grid-cols-3 gap-2">
+              {/* 테마 프리셋 6종 선택 */}
+              <div className="flex flex-col gap-1.5 pt-1">
+                <label className="text-xs font-bold text-[#333D4B]">테마 프리셋 (6종)</label>
+                <div className="grid grid-cols-2 gap-2">
                   {THEME_OPTIONS.map((themeOpt) => {
                     const isSelected = profileForm.watch('theme') === themeOpt.value;
                     return (
@@ -1339,29 +1580,25 @@ export default function MyPage() {
                         key={themeOpt.value}
                         type="button"
                         onClick={() => profileForm.setValue('theme', themeOpt.value)}
-                        className={`p-2.5 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs cursor-pointer ${
+                        className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
                           isSelected
-                            ? 'border-[#5B5FC7] bg-[#F0F0FF] ring-2 ring-[#5B5FC7]'
+                            ? 'border-[#5B5FC7] ring-2 ring-[#5B5FC7]/20 bg-[#F0F0FF]'
                             : 'border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F2F4F6]'
                         }`}
                       >
-                        <div className={`w-full h-7 rounded-lg ${themeOpt.bg} border ${themeOpt.border} flex items-center justify-center text-[10px] font-bold ${themeOpt.text}`}>
-                          Aa
-                        </div>
-                        <span className="text-[11px] font-bold truncate max-w-full text-[#191F28]">
-                          {themeOpt.label}
-                        </span>
+                        <span className="text-xs font-bold text-[#191F28]">{themeOpt.label}</span>
+                        <div
+                          className={`w-4 h-4 rounded-full ${themeOpt.bg} border ${themeOpt.border} shadow-2xs`}
+                        />
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* 버튼 스타일 선택 (3종) */}
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-bold text-[#333D4B]">
-                  버튼 스타일 선택 (THEME-02)
-                </label>
+              {/* 버튼 스타일 3종 선택 */}
+              <div className="flex flex-col gap-1.5 pt-1">
+                <label className="text-xs font-bold text-[#333D4B]">버튼 스타일 (3종)</label>
                 <div className="grid grid-cols-3 gap-2">
                   {BUTTON_STYLE_OPTIONS.map((btnOpt) => {
                     const isSelected = profileForm.watch('buttonStyle') === btnOpt.value;
@@ -1370,233 +1607,128 @@ export default function MyPage() {
                         key={btnOpt.value}
                         type="button"
                         onClick={() => profileForm.setValue('buttonStyle', btnOpt.value)}
-                        className={`p-2.5 rounded-xl border flex flex-col items-center gap-1.5 transition-all text-xs cursor-pointer ${
+                        className={`p-2.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1 cursor-pointer ${
                           isSelected
-                            ? 'border-[#5B5FC7] bg-[#F0F0FF] ring-2 ring-[#5B5FC7]'
-                            : 'border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F2F4F6]'
+                            ? 'border-[#5B5FC7] ring-2 ring-[#5B5FC7]/20 bg-[#F0F0FF] text-[#5B5FC7] font-bold'
+                            : 'border-[#E5E8EB] bg-[#F9FAFB] text-[#6B7684] hover:bg-[#F2F4F6]'
                         }`}
                       >
-                        <div className={`w-full h-7 ${btnOpt.shape} bg-[#5B5FC7] text-white flex items-center justify-center text-[10px] font-bold`}>
-                          버튼
-                        </div>
-                        <span className="text-[11px] font-bold truncate text-[#191F28]">
-                          {btnOpt.label}
-                        </span>
+                        <div className={`w-12 h-3.5 bg-[#5B5FC7]/30 border border-[#5B5FC7] ${btnOpt.shape}`} />
+                        <span className="text-[11px] font-semibold">{btnOpt.label}</span>
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              <DialogFooter className="mt-2">
+              <DialogFooter className="pt-2">
                 <DialogClose className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer">
                   취소
                 </DialogClose>
                 <button
                   type="submit"
-                  className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                  className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all shadow-sm cursor-pointer"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>설정 적용하기</span>
+                  프로필 저장
                 </button>
               </DialogFooter>
             </form>
           </DialogContent>
         </Dialog>
 
-        {/* --- 4. 소셜 링크 관리 다이얼로그 (React Hook Form + Zod) --- */}
+        {/* --- 3. 소셜 링크 관리 다이얼로그 (React Hook Form + Zod) --- */}
         <Dialog open={isSocialsDialogOpen} onOpenChange={setIsSocialsDialogOpen}>
-          <DialogContent>
+          <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>소셜 아카이브 링크 관리 (PAGE-03)</DialogTitle>
+              <DialogTitle>소셜 아카이브 링크 관리</DialogTitle>
               <DialogDescription>
-                프로필 하단 소셜 아이콘 바에 표시할 인스타그램, 유튜브, 깃허브 등 매체를 관리하세요.
+                인스타그램, 유튜브, 깃허브 등 소셜 링크를 추가하고 삭제할 수 있어요.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
-              {/* 등록된 소셜 링크 리스트 */}
-              <div className="space-y-2">
-                <div className="text-xs font-bold text-[#333D4B]">
-                  현재 등록된 소셜 링크 ({socials.length}개)
-                </div>
-                {socials.length === 0 ? (
-                  <div className="p-4 rounded-xl bg-[#F9FAFB] text-xs text-[#8B95A1] text-center border border-[#E5E8EB]">
-                    등록된 소셜 링크가 없습니다.
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                    {socials.map((s) => {
-                      const matched = SOCIAL_PLATFORM_OPTIONS.find((p) => p.value === s.platform);
-                      const IconComp = matched ? matched.icon : Globe;
-                      return (
-                        <div
-                          key={s.id}
-                          className="flex items-center justify-between p-2.5 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB] text-xs"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="w-6 h-6 rounded-lg bg-[#F0F0FF] text-[#5B5FC7] flex items-center justify-center flex-shrink-0">
-                              <IconComp className="w-3.5 h-3.5" />
-                            </div>
-                            <span className="font-bold text-[#191F28] capitalize flex-shrink-0">
-                              {s.platform}:
-                            </span>
-                            <span className="text-[#6B7684] truncate">{s.url}</span>
-                          </div>
-                          <button
-                            onClick={() => handleDeleteSocialLink(s.id)}
-                            className="p-1 text-[#8B95A1] hover:text-[#E90064] hover:bg-[#FFF0F0] rounded-lg transition-colors cursor-pointer"
-                            title="삭제"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
               {/* 소셜 링크 추가 폼 */}
-              <form onSubmit={socialForm.handleSubmit(onAddSocialSubmit)} className="p-3.5 rounded-2xl bg-[#F0F0FF] border border-[#DCDCFB] space-y-3">
-                <div className="text-xs font-bold text-[#5B5FC7]">새 소셜 링크 추가 (Zod 검증)</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {SOCIAL_PLATFORM_OPTIONS.map((opt) => {
-                    const isSelected = socialForm.watch('platform') === opt.value;
-                    const IconComp = opt.icon;
-                    return (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => socialForm.setValue('platform', opt.value as SocialLinkItem['platform'])}
-                        className={`p-1.5 rounded-lg border text-[11px] font-semibold flex items-center justify-center gap-1 cursor-pointer transition-all ${
-                          isSelected
-                            ? 'bg-white border-[#5B5FC7] text-[#5B5FC7] shadow-xs'
-                            : 'bg-white/50 border-[#E5E8EB] text-[#6B7684]'
-                        }`}
-                      >
-                        <IconComp className="w-3 h-3" />
-                        <span>{opt.label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+              <form onSubmit={socialForm.handleSubmit(onAddSocialSubmit)} className="space-y-3 p-3.5 bg-[#F9FAFB] rounded-2xl border border-[#E5E8EB]">
+                <div className="text-xs font-bold text-[#191F28]">새 소셜 링크 추가</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-semibold text-[#6B7684]">플랫폼</label>
+                    <select
+                      {...socialForm.register('platform')}
+                      className="px-2.5 py-1.5 rounded-xl border border-[#E5E8EB] bg-white text-xs text-[#191F28] focus:outline-none focus:border-[#5B5FC7]"
+                    >
+                      {SOCIAL_PLATFORM_OPTIONS.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div className="flex flex-col gap-1">
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[11px] font-semibold text-[#6B7684]">URL 주소</label>
                     <input
                       type="text"
-                      placeholder={
-                        socialForm.watch('platform') === 'email'
-                          ? '예: contact@example.com'
-                          : '예: https://instagram.com/myaccount'
-                      }
+                      placeholder="https://..."
                       {...socialForm.register('url')}
-                      className={`flex-1 px-3 py-1.5 rounded-xl border bg-white text-xs placeholder-[#8B95A1] focus:outline-none transition-all ${
+                      className={`px-2.5 py-1.5 rounded-xl border text-xs placeholder-[#8B95A1] focus:outline-none ${
                         socialForm.formState.errors.url
-                          ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
+                          ? 'border-[#E90064]'
                           : 'border-[#E5E8EB] focus:border-[#5B5FC7]'
                       }`}
                     />
-                    <button
-                      type="submit"
-                      className="px-4 py-1.5 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white font-bold text-xs rounded-xl transition-all shadow-xs cursor-pointer flex items-center gap-1"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>추가</span>
-                    </button>
-                  </div>
-                  {socialForm.formState.errors.url && (
-                    <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-1">
-                      <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>{socialForm.formState.errors.url.message}</span>
-                    </div>
-                  )}
-                </div>
-              </form>
-            </div>
-
-            <DialogFooter>
-              <DialogClose className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer">
-                닫기
-              </DialogClose>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        {/* --- 5. 통계 분석 다이얼로그 (STAT-01 ~ 03) --- */}
-        <Dialog open={isAnalyticsDialogOpen} onOpenChange={setIsAnalyticsDialogOpen}>
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <BarChart3 className="w-5 h-5 text-[#3182F6]" />
-                <span>대시보드 통계 & 애널리틱스</span>
-              </DialogTitle>
-              <DialogDescription>
-                PRD STAT-01 ~ 03 요구사항: 로컬 스토리지에 수집된 프로필 방문수(PV) 및 개별 링크 클릭 추이를 확인하세요.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-4">
-              {/* 통계 요약 카드 */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-4 rounded-2xl bg-[#E8F3FF] border border-[#BBE0FF] text-center">
-                  <div className="text-xs font-bold text-[#3182F6] mb-1">총 프로필 방문수 (PV)</div>
-                  <div className="text-2xl font-extrabold text-[#191F28] tabular-nums">
-                    {totalPageViews}회
                   </div>
                 </div>
-                <div className="p-4 rounded-2xl bg-[#F0F0FF] border border-[#DCDCFB] text-center">
-                  <div className="text-xs font-bold text-[#5B5FC7] mb-1">총 링크 클릭 수</div>
-                  <div className="text-2xl font-extrabold text-[#191F28] tabular-nums">
-                    {totalClicks}회
+
+                {socialForm.formState.errors.url && (
+                  <div className="text-[11px] text-[#E90064] font-medium flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    <span>{socialForm.formState.errors.url.message}</span>
                   </div>
-                </div>
-              </div>
+                )}
 
-              {/* 링크별 개별 클릭 수 리스트 */}
-              <div className="space-y-2">
-                <div className="text-xs font-bold text-[#333D4B]">
-                  개별 링크 클릭 수 집계 (STAT-02)
-                </div>
-
-                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                  {links.filter((l) => !l.isHeader).map((link) => {
-                    const clickCount = link.clicks || 0;
-                    const percent = totalClicks > 0 ? Math.round((clickCount / totalClicks) * 100) : 0;
-                    return (
-                      <div key={link.id} className="p-3 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB] space-y-1.5 text-xs">
-                        <div className="flex justify-between font-bold text-[#191F28]">
-                          <span className="truncate max-w-[240px]">{link.title}</span>
-                          <span className="text-[#3182F6] tabular-nums">{clickCount}회 ({percent}%)</span>
-                        </div>
-                        {/* 클릭 비율 바 */}
-                        <div className="w-full h-2 rounded-full bg-[#E5E8EB] overflow-hidden">
-                          <div
-                            className="h-full bg-[#3182F6] rounded-full transition-all duration-300"
-                            style={{ width: `${percent}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 통계 초기화 버튼 */}
-              <div className="flex justify-end pt-2">
                 <button
-                  type="button"
-                  onClick={handleResetAnalytics}
-                  className="px-3 py-1.5 text-xs font-semibold text-[#E90064] hover:bg-[#FFF0F0] rounded-lg border border-[#FFD0D0] transition-colors flex items-center gap-1 cursor-pointer"
+                  type="submit"
+                  className="w-full h-8 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center gap-1 cursor-pointer"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>통계 데이터 초기화</span>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>소셜 링크 추가</span>
                 </button>
+              </form>
+
+              {/* 현재 등록된 소셜 링크 목록 */}
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                <div className="text-xs font-bold text-[#191F28] px-1">등록된 소셜 링크 ({socials.length})</div>
+                {socials.length === 0 ? (
+                  <div className="text-center py-4 text-xs text-[#8B95A1] bg-[#F9FAFB] rounded-xl border border-dashed border-[#E5E8EB]">
+                    등록된 소셜 링크가 없습니다.
+                  </div>
+                ) : (
+                  socials.map((s) => (
+                    <div
+                      key={s.id}
+                      className="flex items-center justify-between p-2.5 rounded-xl bg-white border border-[#E5E8EB] text-xs"
+                    >
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className="font-bold text-[#5B5FC7] uppercase text-[10px] bg-[#F0F0FF] px-2 py-0.5 rounded-md">
+                          {s.platform}
+                        </span>
+                        <span className="text-[#4E5968] truncate max-w-[200px]">{s.url}</span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteSocialLink(s.id)}
+                        className="text-[#E90064] hover:bg-[#FFF0F5] p-1.5 rounded-lg transition-colors cursor-pointer"
+                        title="소셜 링크 삭제"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="pt-2">
               <DialogClose className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer">
                 닫기
               </DialogClose>
@@ -1604,98 +1736,179 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- 6. 페르소나 / 프로필 스위처 다이얼로그 (React Hook Form + Zod) --- */}
-        <Dialog open={isSwitcherDialogOpen} onOpenChange={setIsSwitcherDialogOpen}>
-          <DialogContent>
+        {/* --- 4. 통계 & 애널리틱스 다이얼로그 --- */}
+        <Dialog open={isAnalyticsDialogOpen} onOpenChange={setIsAnalyticsDialogOpen}>
+          <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>시연용 페르소나 / 프로필 전환</DialogTitle>
+              <DialogTitle>대시보드 통계 & 애널리틱스</DialogTitle>
               <DialogDescription>
-                PRD §3.3 더미 데이터 페르소나 또는 새 커스텀 핸들로 로컬 상태를 자유롭게 전환하세요.
+                방문자 수(PV) 및 개별 링크 클릭 통계를 확인하고 성과를 분석해 보세요.
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
-              {/* 프리셋 더미 페르소나 선택 */}
+              {/* 상단 통계 카드 */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-4 rounded-2xl bg-[#F0F0FF] border border-[#DCDCFB] text-center">
+                  <div className="text-xs text-[#5B5FC7] font-semibold">총 프로필 방문 (PV)</div>
+                  <div className="text-2xl font-black text-[#5B5FC7] mt-1 tabular-nums">
+                    {totalPageViews}
+                  </div>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#E8F3FF] border border-[#CDE3FF] text-center">
+                  <div className="text-xs text-[#3182F6] font-semibold">총 링크 클릭 수</div>
+                  <div className="text-2xl font-black text-[#3182F6] mt-1 tabular-nums">
+                    {totalClicks}
+                  </div>
+                </div>
+              </div>
+
+              {/* 개별 링크 클릭 통계 리스트 */}
+              <div className="space-y-2 max-h-56 overflow-y-auto">
+                <div className="text-xs font-bold text-[#191F28] px-1">링크별 클릭 통계</div>
+                {links.filter((l) => !l.isHeader).length === 0 ? (
+                  <div className="text-center py-4 text-xs text-[#8B95A1] bg-[#F9FAFB] rounded-xl border border-dashed border-[#E5E8EB]">
+                    등록된 웹사이트 링크가 없습니다.
+                  </div>
+                ) : (
+                  links
+                    .filter((l) => !l.isHeader)
+                    .map((link) => {
+                      const clicks = link.clicks || 0;
+                      const percentage = totalClicks > 0 ? Math.round((clicks / totalClicks) * 100) : 0;
+                      return (
+                        <div
+                          key={link.id}
+                          className="p-2.5 rounded-xl bg-white border border-[#E5E8EB] space-y-1.5"
+                        >
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-[#191F28] truncate max-w-[220px]">
+                              {link.title}
+                            </span>
+                            <span className="font-semibold text-[#3182F6] tabular-nums">
+                              {clicks}회 ({percentage}%)
+                            </span>
+                          </div>
+                          {/* 프로그레스 바 */}
+                          <div className="w-full h-1.5 bg-[#F2F4F6] rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-[#3182F6] rounded-full transition-all duration-300"
+                              style={{ width: `${percentage}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+            </div>
+
+            <DialogFooter className="flex justify-between items-center sm:justify-between pt-2">
+              <button
+                type="button"
+                onClick={handleResetAnalytics}
+                className="text-xs font-semibold text-[#8B95A1] hover:text-[#E90064] transition-colors flex items-center gap-1 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>통계 초기화</span>
+              </button>
+              <DialogClose className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer">
+                닫기
+              </DialogClose>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* --- 5. 프로필 / 페르소나 스위처 다이얼로그 (React Hook Form + Zod) --- */}
+        <Dialog open={isSwitcherDialogOpen} onOpenChange={setIsSwitcherDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>프로필 / 페르소나 전환</DialogTitle>
+              <DialogDescription>
+                더미 페르소나를 선택하거나 새로운 URL 핸들을 생성하여 프로필을 즉시 전환해 보세요.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {/* 신규 핸들 생성 폼 */}
+              <form onSubmit={usernameForm.handleSubmit(onCreateUsernameSubmit)} className="space-y-2.5 p-3.5 bg-[#F9FAFB] rounded-2xl border border-[#E5E8EB]">
+                <div className="text-xs font-bold text-[#191F28]">새 URL 핸들 생성</div>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      placeholder="영문 소문자, 숫자, 밑줄 (예: my_brand)"
+                      {...usernameForm.register('username')}
+                      className={`w-full px-3 py-1.5 rounded-xl border text-xs placeholder-[#8B95A1] focus:outline-none ${
+                        usernameForm.formState.errors.username
+                          ? 'border-[#E90064]'
+                          : 'border-[#E5E8EB] focus:border-[#5B5FC7]'
+                      }`}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="h-8 px-3.5 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white font-bold text-xs rounded-xl transition-all cursor-pointer shadow-xs flex-shrink-0"
+                  >
+                    전환
+                  </button>
+                </div>
+                {usernameForm.formState.errors.username && (
+                  <div className="text-[11px] text-[#E90064] font-medium flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    <span>{usernameForm.formState.errors.username.message}</span>
+                  </div>
+                )}
+              </form>
+
+              {/* 페르소나 목록 */}
               <div className="space-y-2">
-                <div className="text-xs font-bold text-[#333D4B]">더미 페르소나 3종 선택</div>
-                <div className="space-y-2">
+                <div className="text-xs font-bold text-[#191F28] px-1">기본 시연 페르소나 선택</div>
+                <div className="grid grid-cols-1 gap-2">
+                  {/* 기본 demo */}
                   <button
                     type="button"
                     onClick={() => handleSwitchProfile('demo')}
-                    className={`w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
                       username === 'demo'
-                        ? 'border-[#5B5FC7] bg-[#F0F0FF] ring-1 ring-[#5B5FC7]'
-                        : 'border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F2F4F6]'
+                        ? 'border-[#5B5FC7] bg-[#F0F0FF] text-[#5B5FC7] font-bold ring-1 ring-[#5B5FC7]'
+                        : 'border-[#E5E8EB] bg-white hover:bg-[#F9FAFB] text-[#191F28]'
                     }`}
                   >
                     <div>
-                      <div className="text-xs font-bold text-[#191F28]">홍길동 (@demo)</div>
-                      <div className="text-[11px] text-[#6B7684]">기본 대표 크리에이터 프로필</div>
+                      <div className="text-xs font-bold">기본 시연 프로필 (@demo)</div>
+                      <div className="text-[11px] text-[#8B95A1]">이수아의 프로필</div>
                     </div>
                     {username === 'demo' && <Check className="w-4 h-4 text-[#5B5FC7]" />}
                   </button>
 
+                  {/* 더미 3종 */}
                   {DUMMY_PROFILES.map((p) => {
-                    const isCurrent = username.toLowerCase() === p.username.toLowerCase();
+                    const isSelected = username === p.username;
                     return (
                       <button
                         key={p.username}
                         type="button"
                         onClick={() => handleSwitchProfile(p.username)}
-                        className={`w-full p-3 rounded-xl border text-left flex items-center justify-between transition-all cursor-pointer ${
-                          isCurrent
-                            ? 'border-[#5B5FC7] bg-[#F0F0FF] ring-1 ring-[#5B5FC7]'
-                            : 'border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F2F4F6]'
+                        className={`p-3 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                          isSelected
+                            ? 'border-[#5B5FC7] bg-[#F0F0FF] text-[#5B5FC7] font-bold ring-1 ring-[#5B5FC7]'
+                            : 'border-[#E5E8EB] bg-white hover:bg-[#F9FAFB] text-[#191F28]'
                         }`}
                       >
                         <div>
-                          <div className="text-xs font-bold text-[#191F28]">
-                            {p.name} (@{p.username})
-                          </div>
-                          <div className="text-[11px] text-[#6B7684]">
-                            테마: {p.theme} | 링크 {p.links.length}개
-                          </div>
+                          <div className="text-xs font-bold">{p.name} (@{p.username})</div>
+                          <div className="text-[11px] text-[#8B95A1]">{p.bio}</div>
                         </div>
-                        {isCurrent && <Check className="w-4 h-4 text-[#5B5FC7]" />}
+                        {isSelected && <Check className="w-4 h-4 text-[#5B5FC7]" />}
                       </button>
                     );
                   })}
                 </div>
               </div>
-
-              {/* 커스텀 핸들 생성 (RHF + Zod) */}
-              <form onSubmit={usernameForm.handleSubmit(onCreateUsernameSubmit)} className="pt-2 border-t border-[#E5E8EB] space-y-2">
-                <div className="text-xs font-bold text-[#333D4B]">새 커스텀 핸들(URL)로 가입/생성 (Zod 검증)</div>
-                <div className="flex flex-col gap-1">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="예: my_new_handle"
-                      {...usernameForm.register('username')}
-                      className={`flex-1 px-3.5 py-2 rounded-xl border text-xs placeholder-[#8B95A1] focus:outline-none transition-all ${
-                        usernameForm.formState.errors.username
-                          ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
-                          : 'border-[#E5E8EB] focus:border-[#5B5FC7]'
-                      }`}
-                    />
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white font-bold text-xs rounded-xl transition-all shadow-xs cursor-pointer"
-                    >
-                      생성 및 전환
-                    </button>
-                  </div>
-                  {usernameForm.formState.errors.username && (
-                    <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-1">
-                      <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span>{usernameForm.formState.errors.username.message}</span>
-                    </div>
-                  )}
-                </div>
-              </form>
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="pt-2">
               <DialogClose className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer">
                 닫기
               </DialogClose>
@@ -1703,7 +1916,46 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-      </div>
+        {/* --- 6. 링크 삭제 확인 다이얼로그 (Firestore users/{user.uid}/links) --- */}
+        <Dialog open={!!deletingLink} onOpenChange={(open) => { if (!open && !isDeletingInFirestore) setDeletingLink(null); }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="text-[#E90064] flex items-center gap-1.5">
+                <Trash2 className="w-4 h-4 text-[#E90064]" />
+                <span>블록을 삭제하시겠어요?</span>
+              </DialogTitle>
+              <DialogDescription className="pt-1.5">
+                선택하신 &apos;<span className="font-bold text-[#191F28]">{deletingLink?.title}</span>&apos; 블록이 Firestore에서 영구적으로 삭제돼요.
+              </DialogDescription>
+            </DialogHeader>
+
+            <DialogFooter className="pt-3 flex gap-2">
+              <DialogClose
+                disabled={isDeletingInFirestore}
+                className="flex-1 h-9 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer disabled:opacity-50"
+              >
+                취소
+              </DialogClose>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={isDeletingInFirestore}
+                className="flex-1 h-9 bg-[#E90064] hover:bg-[#D00057] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {isDeletingInFirestore ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>삭제 중...</span>
+                  </>
+                ) : (
+                  <span>삭제하기</span>
+                )}
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+      </main>
     </div>
   );
 }

@@ -8,22 +8,15 @@ import { ProfileListItemCard } from '@/components/ProfileListItemCard';
 import { Card, CardContent } from '@/components/ui/card';
 import { Sparkles } from 'lucide-react';
 
+import { Header } from '@/components/Header';
+
 const allProfiles: ProfileData[] = [INITIAL_PROFILE_DATA, ...DUMMY_PROFILES];
 
 export default function LinksPage() {
   return (
     <div className="min-h-screen bg-[#F2F4F6] text-[#191F28] font-sans antialiased">
-      {/* 상단 앱 바 */}
-      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-[#E5E8EB] h-14 px-4 sm:px-6 flex items-center">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-[#3182F6] flex items-center justify-center text-white font-black text-[10px]">
-            ML
-          </div>
-          <span className="font-bold text-[17px] text-[#191F28] tracking-tight">
-            마이링크 프로필 목록
-          </span>
-        </div>
-      </header>
+      {/* 공통 상단 헤더 */}
+      <Header />
 
       <main className="mx-auto max-w-xl px-4 pt-6 pb-12 space-y-4">
         {/* 안내 배너 (shadcn/ui Card 사용) */}
