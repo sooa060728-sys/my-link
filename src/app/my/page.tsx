@@ -44,12 +44,14 @@ import {
   updateLinkInFirestore,
   deleteLinkFromFirestore,
   subscribeLinksFromFirestore,
+  checkDisplayNameAvailability,
 } from '@/lib/firebase';
 import { DUMMY_PROFILES } from '@/lib/dummyData';
 import { ProfileData, LinkItem as ProfileLinkItem, ThemeType, ButtonStyleType, SocialLinkItem } from '@/types';
 import Link from 'next/link';
 import { Header } from '@/components/Header';
 import { useAuth } from '@/context/AuthContext';
+import { toast } from 'sonner';
 import {
   Dialog,
   DialogContent,
@@ -69,6 +71,13 @@ import {
   SocialFormValues,
   UsernameFormValues,
 } from '@/lib/schemas';
+
+const AVATAR_PRESETS = [
+  { label: '개발자 봇', url: 'https://api.dicebear.com/7.x/bottts/svg?seed=dev_hero' },
+  { label: '크리에이터', url: 'https://api.dicebear.com/7.x/avataaars/svg?seed=creator_star' },
+  { label: '디자이너', url: 'https://api.dicebear.com/7.x/personas/svg?seed=art_yuna' },
+  { label: '캐주얼 픽셀', url: 'https://api.dicebear.com/7.x/micah/svg?seed=casual_sky' },
+];
 
 const ICON_OPTIONS = [
   { value: 'Globe', label: '웹사이트', icon: Globe },
@@ -130,7 +139,15 @@ function formatUpdatedAt(dateStr?: string): string {
 }
 
 export default function MyPage() {
-  const { user, firestoreUser, loading: authLoading, isLoggingIn, login, logout } = useAuth();
+  const {
+    user,
+    firestoreUser,
+    loading: authLoading,
+    isLoggingIn,
+    login,
+    logout,
+    updateUserProfileData,
+  } = useAuth();
 
   const [username, setUsername] = useState('demo');
   const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -142,6 +159,14 @@ export default function MyPage() {
   const [isSocialsDialogOpen, setIsSocialsDialogOpen] = useState(false);
   const [isAnalyticsDialogOpen, setIsAnalyticsDialogOpen] = useState(false);
   const [isSwitcherDialogOpen, setIsSwitcherDialogOpen] = useState(false);
+
+  // 프로필 수정 및 Display Name 중복 검사 상태
+  const [displayNameCheckStatus, setDisplayNameCheckStatus] = useState<
+    'idle' | 'checking' | 'available' | 'duplicate' | 'same_as_current' | 'invalid'
+  >('idle');
+  const [displayNameCheckMessage, setDisplayNameCheckMessage] = useState<string>('');
+  const [lastCheckedDisplayName, setLastCheckedDisplayName] = useState<string>('');
+  const [isSubmittingProfile, setIsSubmittingProfile] = useState<boolean>(false);
 
   // 인라인 수정 대상 링크 ID
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
@@ -269,6 +294,7 @@ export default function MyPage() {
     const path = `users/${user.uid}/links`;
     navigator.clipboard.writeText(path);
     setCopiedPath(true);
+    toast.success('Firestore 경로가 복사되었어요!', { description: path });
     setTimeout(() => setCopiedPath(false), 2000);
   };
 
@@ -315,9 +341,11 @@ export default function MyPage() {
       saveProfileData(username, updatedProfile);
       addBlockForm.reset({ blockType: 'link', title: '', url: '', icon: 'Globe', isActive: true });
       setIsAddDialogOpen(false);
+      toast.success('새 블록이 성공적으로 추가되었어요!');
     } catch (e) {
       console.error('Firestore 링크 저장 처리 에러:', e);
       setSyncStatus('idle');
+      toast.error('블록 추가에 실패했습니다.');
     } finally {
       setIsSubmittingBlock(false);
     }
@@ -392,6 +420,7 @@ export default function MyPage() {
     saveProfileData(username, updatedProfile);
     editBlockForm.reset();
     setEditingLinkId(null);
+    toast.success('블록 정보가 수정되었어요!');
   };
 
   // --- 3. 링크 삭제 확인 모달 실행 (Firestore users/{user.uid}/links) ---
@@ -405,9 +434,11 @@ export default function MyPage() {
       // Firestore 삭제 (users/{user.uid}/links/{targetId})
       await deleteLinkFromFirestore(targetId, user.uid);
       setSyncStatus('synced');
+      toast.success('선택하신 블록이 삭제되었어요.');
     } catch (e) {
       console.error('Firestore 링크 삭제 에러:', e);
       setSyncStatus('idle');
+      toast.error('블록 삭제에 실패했습니다.');
     } finally {
       setIsDeletingInFirestore(false);
     }
@@ -446,6 +477,7 @@ export default function MyPage() {
 
     setProfile(updatedProfile);
     saveProfileData(username, updatedProfile);
+    toast.info(newActiveState ? '블록이 공개 상태로 전환되었어요.' : '블록이 비공개 처리되었어요.');
   };
 
   const handleMoveLink = (index: number, direction: 'up' | 'down') => {
@@ -465,34 +497,148 @@ export default function MyPage() {
     saveProfileData(username, updatedProfile);
   };
 
-  // --- 4. 프로필 정보 & 테마 수정 (RHF + Zod) ---
+  // --- 4. 프로필 정보 & 테마 수정 (RHF + Zod + 중복 검사 + Firestore 연동) ---
   const handleOpenProfileDialog = () => {
-    if (!profile) return;
+    const currentName = firestoreUser?.displayName || profile?.name || user?.displayName || '';
+    const currentBio = firestoreUser?.bio || profile?.bio || '';
+    const currentAvatar = firestoreUser?.photoURL || profile?.avatarUrl || user?.photoURL || '';
+
     profileForm.reset({
-      name: profile.name || user?.displayName || '',
-      bio: profile.bio || '',
-      avatarUrl: profile.avatarUrl || user?.photoURL || '',
-      theme: profile.theme || 'light',
-      buttonStyle: profile.buttonStyle || 'rounded',
+      name: currentName,
+      bio: currentBio,
+      avatarUrl: currentAvatar,
+      theme: profile?.theme || 'light',
+      buttonStyle: profile?.buttonStyle || 'rounded',
     });
+
+    setDisplayNameCheckStatus('same_as_current');
+    setDisplayNameCheckMessage('현재 사용 중인 본인의 닉네임입니다.');
+    setLastCheckedDisplayName(currentName.trim());
     setIsProfileDialogOpen(true);
   };
 
-  const onProfileSubmit = (data: ProfileFormValues) => {
-    if (!profile) return;
+  const handleCheckDisplayName = async () => {
+    const rawName = profileForm.getValues('name');
+    const inputName = rawName?.trim() || '';
 
-    const updatedProfile: ProfileData = {
-      ...profile,
-      name: data.name.trim(),
-      bio: (data.bio || '').trim(),
-      avatarUrl: (data.avatarUrl || '').trim(),
-      theme: data.theme,
-      buttonStyle: data.buttonStyle,
-    };
+    if (!inputName) {
+      setDisplayNameCheckStatus('invalid');
+      setDisplayNameCheckMessage('닉네임(Display Name)을 입력해 주세요.');
+      toast.error('닉네임을 입력해 주세요.');
+      return;
+    }
 
-    setProfile(updatedProfile);
-    saveProfileData(username, updatedProfile);
-    setIsProfileDialogOpen(false);
+    if (inputName.length < 2) {
+      setDisplayNameCheckStatus('invalid');
+      setDisplayNameCheckMessage('닉네임은 2자 이상이어야 합니다.');
+      toast.error('닉네임은 2자 이상이어야 합니다.');
+      return;
+    }
+
+    if (inputName.length > 20) {
+      setDisplayNameCheckStatus('invalid');
+      setDisplayNameCheckMessage('닉네임은 20자 이하이어야 합니다.');
+      toast.error('닉네임은 20자 이하이어야 합니다.');
+      return;
+    }
+
+    const validRegex = /^[a-zA-Z0-9가-힣_\-\s]+$/;
+    if (!validRegex.test(inputName)) {
+      setDisplayNameCheckStatus('invalid');
+      setDisplayNameCheckMessage('한글, 영문, 숫자, 언더바(_), 하이픈(-), 공백만 사용할 수 있어요.');
+      toast.error('허용되지 않는 특수문자가 포함되어 있습니다.');
+      return;
+    }
+
+    const currentMyName = (firestoreUser?.displayName || user?.displayName || profile?.name || '').trim();
+    if (inputName === currentMyName) {
+      setDisplayNameCheckStatus('same_as_current');
+      setDisplayNameCheckMessage('현재 사용 중인 본인의 닉네임입니다.');
+      setLastCheckedDisplayName(inputName);
+      toast.info('현재 사용 중인 본인의 닉네임이에요.');
+      return;
+    }
+
+    setDisplayNameCheckStatus('checking');
+    setDisplayNameCheckMessage('중복 여부를 확인하는 중...');
+
+    try {
+      const result = await checkDisplayNameAvailability(inputName, user?.uid);
+      setLastCheckedDisplayName(inputName);
+
+      if (result.available) {
+        setDisplayNameCheckStatus('available');
+        setDisplayNameCheckMessage(result.message);
+        toast.success(result.message);
+      } else {
+        setDisplayNameCheckStatus('duplicate');
+        setDisplayNameCheckMessage(result.message);
+        toast.error(result.message);
+      }
+    } catch (e) {
+      console.error('중복 검사 오류:', e);
+      setDisplayNameCheckStatus('idle');
+      toast.error('중복 확인 중 네트워크 오류가 발생했습니다.');
+    }
+  };
+
+  const onProfileSubmit = async (data: ProfileFormValues) => {
+    if (!profile || isSubmittingProfile) return;
+
+    const trimmedName = data.name.trim();
+    const currentMyName = (firestoreUser?.displayName || user?.displayName || profile?.name || '').trim();
+
+    // 닉네임이 이전과 달라졌는데 아직 중복 검사를 통과하지 않은 경우 자동 중복 검사 수행
+    if (trimmedName !== currentMyName && (displayNameCheckStatus !== 'available' || lastCheckedDisplayName !== trimmedName)) {
+      setDisplayNameCheckStatus('checking');
+      setDisplayNameCheckMessage('중복 여부를 확인하는 중...');
+      const checkRes = await checkDisplayNameAvailability(trimmedName, user?.uid);
+      setLastCheckedDisplayName(trimmedName);
+
+      if (!checkRes.available) {
+        setDisplayNameCheckStatus('duplicate');
+        setDisplayNameCheckMessage(checkRes.message);
+        toast.error('이미 사용 중인 닉네임입니다. 다른 닉네임을 입력해 주세요.');
+        return;
+      }
+      setDisplayNameCheckStatus('available');
+    }
+
+    setIsSubmittingProfile(true);
+
+    try {
+      const updatedBio = (data.bio || '').trim();
+      const updatedAvatar = (data.avatarUrl || '').trim();
+
+      // 1. Firebase Auth 및 Firestore 동시 업데이트
+      if (user) {
+        await updateUserProfileData({
+          displayName: trimmedName,
+          photoURL: updatedAvatar,
+          bio: updatedBio,
+        });
+      }
+
+      // 2. 로컬 스토리지 및 로컬 상태 동기화
+      const updatedProfile: ProfileData = {
+        ...profile,
+        name: trimmedName,
+        bio: updatedBio,
+        avatarUrl: updatedAvatar,
+        theme: data.theme,
+        buttonStyle: data.buttonStyle,
+      };
+
+      setProfile(updatedProfile);
+      saveProfileData(username, updatedProfile);
+      setIsProfileDialogOpen(false);
+      toast.success('프로필 정보가 성공적으로 변경되었어요!');
+    } catch (e) {
+      console.error('프로필 저장 에러:', e);
+      toast.error('프로필 정보를 저장하지 못했습니다.');
+    } finally {
+      setIsSubmittingProfile(false);
+    }
   };
 
   // --- 5. 소셜 링크 추가 제출 (RHF + Zod) ---
@@ -741,22 +887,22 @@ export default function MyPage() {
 
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
-                    {user.photoURL ? (
+                    {firestoreUser?.photoURL || user.photoURL ? (
                       // eslint-disable-next-next/no-img-element
                       <img
-                        src={user.photoURL}
-                        alt={user.displayName || '프로필'}
+                        src={firestoreUser?.photoURL || user.photoURL || ''}
+                        alt={firestoreUser?.displayName || user.displayName || '프로필'}
                         className="w-14 h-14 rounded-2xl object-cover border-2 border-[#3182F6] shadow-xs flex-shrink-0"
                       />
                     ) : (
                       <div className="w-14 h-14 rounded-2xl bg-[#3182F6] text-white flex items-center justify-center font-bold text-xl shadow-xs flex-shrink-0">
-                        {user.displayName ? user.displayName.charAt(0) : 'U'}
+                        {(firestoreUser?.displayName || user.displayName || 'U').charAt(0)}
                       </div>
                     )}
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <h2 className="text-base font-bold text-[#191F28] truncate">
-                          {user.displayName || '구글 사용자'}
+                          {firestoreUser?.displayName || user.displayName || '구글 사용자'}
                         </h2>
                         <span className="text-[10px] bg-[#E8F3FF] text-[#3182F6] font-bold px-2 py-0.5 rounded-full flex-shrink-0">
                           인증 완료
@@ -769,15 +915,26 @@ export default function MyPage() {
                     </div>
                   </div>
 
-                  {/* 로그아웃 버튼 */}
-                  <button
-                    onClick={() => logout()}
-                    className="p-2 text-[#8B95A1] hover:text-[#F04452] hover:bg-[#FFF0F0] rounded-xl transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer flex-shrink-0"
-                    title="로그아웃"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span className="hidden sm:inline">로그아웃</span>
-                  </button>
+                  {/* 프로필 수정 및 로그아웃 버튼 */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={handleOpenProfileDialog}
+                      className="px-3 py-1.5 text-[#3182F6] hover:bg-[#E8F3FF] bg-[#F2F8FF] border border-[#D5E5FB] rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer active:scale-95"
+                      title="프로필 수정"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>프로필 수정</span>
+                    </button>
+
+                    <button
+                      onClick={() => logout()}
+                      className="p-2 text-[#8B95A1] hover:text-[#F04452] hover:bg-[#FFF0F0] rounded-xl transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
+                      title="로그아웃"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span className="hidden sm:inline">로그아웃</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Firestore 컬렉션 경로 표시 배너 */}
@@ -1486,46 +1643,190 @@ export default function MyPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- 2. 프로필 & 테마 설정 다이얼로그 (React Hook Form + Zod) --- */}
+        {/* --- 2. 프로필 & 테마 설정 다이얼로그 (React Hook Form + Zod + 중복 확인) --- */}
         <Dialog open={isProfileDialogOpen} onOpenChange={setIsProfileDialogOpen}>
           <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>프로필 & 테마 설정</DialogTitle>
+              <DialogTitle className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-[#185EF7]" />
+                <span>프로필 정보 수정</span>
+              </DialogTitle>
               <DialogDescription>
-                닉네임, 소개글, 아바타 및 테마와 버튼 스타일을 커스텀해 보세요.
+                표시 이름(Display Name) 중복 확인과 아바타, 소개글 및 테마를 설정하세요.
               </DialogDescription>
             </DialogHeader>
 
             <form onSubmit={profileForm.handleSubmit(onProfileSubmit)} className="flex flex-col gap-4">
-              {/* 닉네임 */}
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="profile-name" className="text-xs font-bold text-[#333D4B]">
-                  닉네임 / 표시 이름 <span className="text-[#5B5FC7]">*</span>
-                </label>
-                <input
-                  id="profile-name"
-                  type="text"
-                  placeholder="예: 마이링크 크리에이터"
-                  {...profileForm.register('name')}
-                  className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
-                    profileForm.formState.errors.name
-                      ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
-                      : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
-                  }`}
-                />
-                {profileForm.formState.errors.name && (
-                  <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-0.5">
-                    <AlertCircle className="w-3.5 h-3.5" />
-                    <span>{profileForm.formState.errors.name.message}</span>
+              {/* 1. 프로필 아바타 미리보기 및 추천 프리셋 */}
+              <div className="p-3.5 bg-[#F9FAFB] rounded-2xl border border-[#E5E8EB] flex flex-col items-center gap-3">
+                <div className="relative group">
+                  {profileForm.watch('avatarUrl') ? (
+                    // eslint-disable-next-next/no-img-element
+                    <img
+                      src={profileForm.watch('avatarUrl')}
+                      alt="아바타 미리보기"
+                      className="w-20 h-20 rounded-full object-cover border-3 border-[#185EF7] shadow-sm bg-white"
+                    />
+                  ) : (
+                    <div className="w-20 h-20 rounded-full bg-[#185EF7] text-white flex items-center justify-center font-bold text-2xl shadow-sm">
+                      {(profileForm.watch('name') || user?.displayName || 'M').charAt(0)}
+                    </div>
+                  )}
+                  <span className="absolute bottom-0 right-0 p-1 bg-white rounded-full border border-[#E5E8EB] text-[#185EF7] shadow-2xs">
+                    <Camera className="w-3.5 h-3.5" />
+                  </span>
+                </div>
+
+                <div className="w-full space-y-2 text-center">
+                  <div className="text-[11px] font-bold text-[#6B7684]">
+                    추천 아바타 캐릭터 선택
                   </div>
-                )}
+                  <div className="grid grid-cols-4 gap-2">
+                    {AVATAR_PRESETS.map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => profileForm.setValue('avatarUrl', preset.url)}
+                        className={`p-1.5 rounded-xl border flex flex-col items-center gap-1 transition-all cursor-pointer ${
+                          profileForm.watch('avatarUrl') === preset.url
+                            ? 'border-[#185EF7] bg-[#EEF5FF] ring-2 ring-[#185EF7]/20'
+                            : 'border-[#E5E8EB] bg-white hover:bg-[#F2F4F6]'
+                        }`}
+                      >
+                        {/* eslint-disable-next-next/no-img-element */}
+                        <img
+                          src={preset.url}
+                          alt={preset.label}
+                          className="w-8 h-8 rounded-full"
+                        />
+                        <span className="text-[10px] font-semibold text-[#4E5968] truncate max-w-full">
+                          {preset.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {user?.photoURL && profileForm.watch('avatarUrl') !== user.photoURL && (
+                    <button
+                      type="button"
+                      onClick={() => profileForm.setValue('avatarUrl', user.photoURL || '')}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-[#185EF7] hover:underline pt-1 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      <span>Google 계정 원래 사진으로 복원</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {/* 한줄 소개 */}
+              {/* 2. 닉네임 (Display Name) + 실시간 중복 확인 */}
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="profile-bio" className="text-xs font-bold text-[#333D4B]">
-                  한줄 소개 (Bio)
-                </label>
+                <div className="flex justify-between items-center">
+                  <label htmlFor="profile-name" className="text-xs font-bold text-[#333D4B]">
+                    닉네임 / 표시 이름 (Display Name) <span className="text-[#185EF7]">*</span>
+                  </label>
+                  <span className="text-[10px] text-[#8B95A1]">
+                    {profileForm.watch('name')?.length || 0}/20자
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    id="profile-name"
+                    type="text"
+                    placeholder="예: 마이링크 크리에이터"
+                    {...profileForm.register('name', {
+                      onChange: (e) => {
+                        const val = e.target.value.trim();
+                        if (val !== lastCheckedDisplayName) {
+                          setDisplayNameCheckStatus('idle');
+                          setDisplayNameCheckMessage('');
+                        }
+                      },
+                    })}
+                    className={`flex-1 px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
+                      profileForm.formState.errors.name || displayNameCheckStatus === 'duplicate' || displayNameCheckStatus === 'invalid'
+                        ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
+                        : displayNameCheckStatus === 'available' || displayNameCheckStatus === 'same_as_current'
+                        ? 'border-[#20874E] focus:ring-1 focus:ring-[#20874E]'
+                        : 'border-[#E5E8EB] focus:border-[#185EF7] focus:ring-1 focus:ring-[#185EF7]'
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCheckDisplayName}
+                    disabled={displayNameCheckStatus === 'checking'}
+                    className="h-9.5 px-3.5 rounded-xl bg-[#185EF7] hover:bg-[#004FE2] active:scale-95 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 flex-shrink-0 cursor-pointer shadow-xs transition-all"
+                  >
+                    {displayNameCheckStatus === 'checking' ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>확인 중</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>중복 확인</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* 중복 확인 피드백 상태 배너 */}
+                <div className="mt-0.5">
+                  {displayNameCheckStatus === 'available' && (
+                    <div className="p-2 rounded-xl bg-[#E8F8EE] border border-[#BCE8CB] flex items-center gap-1.5 text-xs text-[#20874E] font-medium animate-in fade-in">
+                      <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>{displayNameCheckMessage || '사용 가능한 멋진 닉네임이에요!'}</span>
+                    </div>
+                  )}
+
+                  {displayNameCheckStatus === 'same_as_current' && (
+                    <div className="p-2 rounded-xl bg-[#EEF5FF] border border-[#D5E5FB] flex items-center gap-1.5 text-xs text-[#185EF7] font-medium">
+                      <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>{displayNameCheckMessage || '현재 사용 중인 본인의 닉네임입니다.'}</span>
+                    </div>
+                  )}
+
+                  {displayNameCheckStatus === 'duplicate' && (
+                    <div className="p-2 rounded-xl bg-[#FFF0F0] border border-[#FFD0D0] flex items-center gap-1.5 text-xs text-[#E90064] font-medium animate-in fade-in">
+                      <XCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>{displayNameCheckMessage || '이미 다른 사용자가 사용 중인 닉네임입니다.'}</span>
+                    </div>
+                  )}
+
+                  {displayNameCheckStatus === 'invalid' && (
+                    <div className="p-2 rounded-xl bg-[#FFF0F0] border border-[#FFD0D0] flex items-center gap-1.5 text-xs text-[#E90064] font-medium animate-in fade-in">
+                      <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>{displayNameCheckMessage}</span>
+                    </div>
+                  )}
+
+                  {displayNameCheckStatus === 'idle' && (
+                    <p className="text-[11px] text-[#8B95A1] flex items-center gap-1">
+                      <span>영문, 한글, 숫자 2~20자 (닉네임 변경 후 우측 중복 확인을 눌러주세요)</span>
+                    </p>
+                  )}
+
+                  {profileForm.formState.errors.name && (
+                    <div className="text-xs text-[#E90064] font-medium flex items-center gap-1 mt-1">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>{profileForm.formState.errors.name.message}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. 한줄 소개 */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between items-center">
+                  <label htmlFor="profile-bio" className="text-xs font-bold text-[#333D4B]">
+                    한줄 소개 (Bio)
+                  </label>
+                  <span className="text-[10px] text-[#8B95A1]">
+                    {profileForm.watch('bio')?.length || 0}/150자
+                  </span>
+                </div>
                 <textarea
                   id="profile-bio"
                   rows={2}
@@ -1534,7 +1835,7 @@ export default function MyPage() {
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
                     profileForm.formState.errors.bio
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
-                      : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
+                      : 'border-[#E5E8EB] focus:border-[#185EF7] focus:ring-1 focus:ring-[#185EF7]'
                   }`}
                 />
                 {profileForm.formState.errors.bio && (
@@ -1545,10 +1846,10 @@ export default function MyPage() {
                 )}
               </div>
 
-              {/* 아바타 이미지 URL */}
+              {/* 4. 아바타 이미지 직접 URL 입력 */}
               <div className="flex flex-col gap-1.5">
                 <label htmlFor="profile-avatar" className="text-xs font-bold text-[#333D4B]">
-                  프로필 아바타 이미지 URL
+                  프로필 아바타 직접 URL 입력
                 </label>
                 <input
                   id="profile-avatar"
@@ -1558,7 +1859,7 @@ export default function MyPage() {
                   className={`w-full px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
                     profileForm.formState.errors.avatarUrl
                       ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
-                      : 'border-[#E5E8EB] focus:border-[#5B5FC7] focus:ring-1 focus:ring-[#5B5FC7]'
+                      : 'border-[#E5E8EB] focus:border-[#185EF7] focus:ring-1 focus:ring-[#185EF7]'
                   }`}
                 />
                 {profileForm.formState.errors.avatarUrl && (
@@ -1569,7 +1870,7 @@ export default function MyPage() {
                 )}
               </div>
 
-              {/* 테마 프리셋 6종 선택 */}
+              {/* 5. 테마 프리셋 6종 선택 */}
               <div className="flex flex-col gap-1.5 pt-1">
                 <label className="text-xs font-bold text-[#333D4B]">테마 프리셋 (6종)</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1582,7 +1883,7 @@ export default function MyPage() {
                         onClick={() => profileForm.setValue('theme', themeOpt.value)}
                         className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
                           isSelected
-                            ? 'border-[#5B5FC7] ring-2 ring-[#5B5FC7]/20 bg-[#F0F0FF]'
+                            ? 'border-[#185EF7] ring-2 ring-[#185EF7]/20 bg-[#EEF5FF]'
                             : 'border-[#E5E8EB] bg-[#F9FAFB] hover:bg-[#F2F4F6]'
                         }`}
                       >
@@ -1596,7 +1897,7 @@ export default function MyPage() {
                 </div>
               </div>
 
-              {/* 버튼 스타일 3종 선택 */}
+              {/* 6. 버튼 스타일 3종 선택 */}
               <div className="flex flex-col gap-1.5 pt-1">
                 <label className="text-xs font-bold text-[#333D4B]">버튼 스타일 (3종)</label>
                 <div className="grid grid-cols-3 gap-2">
@@ -1609,11 +1910,11 @@ export default function MyPage() {
                         onClick={() => profileForm.setValue('buttonStyle', btnOpt.value)}
                         className={`p-2.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1 cursor-pointer ${
                           isSelected
-                            ? 'border-[#5B5FC7] ring-2 ring-[#5B5FC7]/20 bg-[#F0F0FF] text-[#5B5FC7] font-bold'
+                            ? 'border-[#185EF7] ring-2 ring-[#185EF7]/20 bg-[#EEF5FF] text-[#185EF7] font-bold'
                             : 'border-[#E5E8EB] bg-[#F9FAFB] text-[#6B7684] hover:bg-[#F2F4F6]'
                         }`}
                       >
-                        <div className={`w-12 h-3.5 bg-[#5B5FC7]/30 border border-[#5B5FC7] ${btnOpt.shape}`} />
+                        <div className={`w-12 h-3.5 bg-[#185EF7]/30 border border-[#185EF7] ${btnOpt.shape}`} />
                         <span className="text-[11px] font-semibold">{btnOpt.label}</span>
                       </button>
                     );
@@ -1622,14 +1923,28 @@ export default function MyPage() {
               </div>
 
               <DialogFooter className="pt-2">
-                <DialogClose className="h-9 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer">
+                <DialogClose
+                  disabled={isSubmittingProfile}
+                  className="h-9.5 px-4 rounded-xl border border-[#E5E8EB] text-xs font-semibold text-[#6B7684] hover:bg-[#F2F4F6] transition-colors cursor-pointer disabled:opacity-50"
+                >
                   취소
                 </DialogClose>
                 <button
                   type="submit"
-                  className="h-9 px-5 bg-[#5B5FC7] hover:bg-[#4B4FA7] active:scale-[0.98] text-white font-bold text-xs rounded-xl transition-all shadow-sm cursor-pointer"
+                  disabled={isSubmittingProfile || displayNameCheckStatus === 'checking'}
+                  className="h-9.5 px-5 bg-[#185EF7] hover:bg-[#004FE2] active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
                 >
-                  프로필 저장
+                  {isSubmittingProfile ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>저장 중...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>프로필 저장</span>
+                    </>
+                  )}
                 </button>
               </DialogFooter>
             </form>

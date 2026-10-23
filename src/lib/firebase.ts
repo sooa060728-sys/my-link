@@ -7,6 +7,7 @@ import {
   signOut as fbSignOut,
   onAuthStateChanged,
   User,
+  updateProfile,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -19,6 +20,7 @@ import {
   deleteDoc,
   query,
   orderBy,
+  where,
   getDocs,
   onSnapshot,
   Unsubscribe,
@@ -122,6 +124,110 @@ export async function getUserProfileFromFirestore(uid: string) {
   } catch (error) {
     console.error('Firestore users/{uid} 조회 실패:', error);
     return null;
+  }
+}
+
+/**
+ * Display Name(닉네임) 중복 검사 함수
+ * Firestore users 컬렉션에서 동일한 displayName이 존재하는지 확인합니다.
+ * @param displayName 확인할 닉네임
+ * @param currentUid 현재 로그인한 사용자의 UID (자신의 기존 닉네임은 사용 가능 처리)
+ */
+export async function checkDisplayNameAvailability(
+  displayName: string,
+  currentUid?: string
+): Promise<{ available: boolean; message: string }> {
+  const trimmed = displayName.trim();
+
+  if (!trimmed) {
+    return { available: false, message: '닉네임을 입력해 주세요.' };
+  }
+
+  if (trimmed.length < 2) {
+    return { available: false, message: '닉네임은 2자 이상이어야 합니다.' };
+  }
+
+  if (trimmed.length > 20) {
+    return { available: false, message: '닉네임은 20자 이하이어야 합니다.' };
+  }
+
+  const validRegex = /^[a-zA-Z0-9가-힣_\-\s]+$/;
+  if (!validRegex.test(trimmed)) {
+    return {
+      available: false,
+      message: '한글, 영문, 숫자, 언더바(_), 하이픈(-), 공백만 사용할 수 있어요.',
+    };
+  }
+
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('displayName', '==', trimmed));
+    const snapshot = await getDocs(q);
+
+    // 검색된 문서 중 현재 사용자가 아닌 다른 사용자가 있는지 검사
+    const duplicateDoc = snapshot.docs.find((d) => d.id !== currentUid);
+    if (duplicateDoc) {
+      return {
+        available: false,
+        message: '이미 다른 사용자가 사용 중인 닉네임입니다.',
+      };
+    }
+
+    return {
+      available: true,
+      message: '사용 가능한 멋진 닉네임이에요!',
+    };
+  } catch (error) {
+    console.warn('Firestore Display Name 중복 검사 에러 (단일 쿼리 실패 등):', error);
+    // 권한 오류나 기타 네트워크 지연 시 통과 처리하되 경고 로그
+    return {
+      available: true,
+      message: '사용 가능한 닉네임입니다.',
+    };
+  }
+}
+
+/**
+ * 프로필 정보(displayName, photoURL, bio)를 Firebase Auth 및 Firestore에 동시 업데이트
+ */
+export async function updateUserProfile(
+  uid: string,
+  updates: { displayName?: string; photoURL?: string; bio?: string }
+) {
+  try {
+    const trimmedDisplayName = updates.displayName !== undefined ? updates.displayName.trim() : undefined;
+    const trimmedPhotoURL = updates.photoURL !== undefined ? updates.photoURL.trim() : undefined;
+    const trimmedBio = updates.bio !== undefined ? updates.bio.trim() : undefined;
+
+    // 1. Firebase Auth currentUser 프로필 업데이트
+    if (auth.currentUser && auth.currentUser.uid === uid) {
+      const authUpdates: { displayName?: string | null; photoURL?: string | null } = {};
+      if (trimmedDisplayName !== undefined) {
+        authUpdates.displayName = trimmedDisplayName;
+      }
+      if (trimmedPhotoURL !== undefined) {
+        authUpdates.photoURL = trimmedPhotoURL;
+      }
+
+      await updateProfile(auth.currentUser, authUpdates);
+    }
+
+    // 2. Firestore users/{uid} 문서 업데이트
+    const userRef = doc(db, 'users', uid);
+    const now = new Date().toISOString();
+    const docUpdates: Record<string, any> = {
+      updatedAt: now,
+    };
+
+    if (trimmedDisplayName !== undefined) docUpdates.displayName = trimmedDisplayName;
+    if (trimmedPhotoURL !== undefined) docUpdates.photoURL = trimmedPhotoURL;
+    if (trimmedBio !== undefined) docUpdates.bio = trimmedBio;
+
+    await setDoc(userRef, docUpdates, { merge: true });
+    return true;
+  } catch (error) {
+    console.error('Firestore users/{uid} 프로필 업데이트 실패:', error);
+    throw error;
   }
 }
 

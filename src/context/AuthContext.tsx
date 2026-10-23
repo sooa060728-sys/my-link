@@ -8,6 +8,7 @@ import {
   logoutFirebase,
   getUserProfileFromFirestore,
   saveUserProfileToFirestore,
+  updateUserProfile,
 } from '@/lib/firebase';
 
 export interface FirestoreUserProfile {
@@ -15,8 +16,10 @@ export interface FirestoreUserProfile {
   email: string;
   displayName: string;
   photoURL: string;
+  bio?: string;
   lastLoginAt?: string;
   createdAt?: string;
+  updatedAt?: string;
   [key: string]: any;
 }
 
@@ -28,6 +31,7 @@ interface AuthContextType {
   login: () => Promise<User | null>;
   logout: () => Promise<void>;
   refreshUserProfile: () => Promise<void>;
+  updateUserProfileData: (updates: { displayName?: string; photoURL?: string; bio?: string }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -38,6 +42,7 @@ const AuthContext = createContext<AuthContextType>({
   login: async () => null,
   logout: async () => {},
   refreshUserProfile: async () => {},
+  updateUserProfileData: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -106,6 +111,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const updateUserProfileData = async (updates: { displayName?: string; photoURL?: string; bio?: string }) => {
+    if (!user) return;
+    await updateUserProfile(user.uid, updates);
+    if (auth.currentUser) {
+      // User 객체 얕은 복사로 강제 리렌더링 유발
+      setUser(Object.assign(Object.create(Object.getPrototypeOf(auth.currentUser)), auth.currentUser));
+    }
+    await fetchFirestoreProfile(user.uid);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -116,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         refreshUserProfile,
+        updateUserProfileData,
       }}
     >
       {children}
