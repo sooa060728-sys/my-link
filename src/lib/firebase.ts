@@ -95,16 +95,32 @@ export async function logoutFirebase(): Promise<void> {
 export async function saveUserProfileToFirestore(user: User) {
   try {
     const userRef = doc(db, 'users', user.uid);
+    const docSnap = await getDoc(userRef);
     const now = new Date().toISOString();
-    const userData = {
-      uid: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || '마이링크 사용자',
-      photoURL: user.photoURL || '',
-      lastLoginAt: now,
-    };
-    await setDoc(userRef, userData, { merge: true });
-    return userData;
+
+    if (docSnap.exists()) {
+      const existing = docSnap.data();
+      const userData: Record<string, any> = {
+        uid: user.uid,
+        email: user.email || existing.email || '',
+        displayName: existing.displayName || user.displayName || '마이링크 사용자',
+        photoURL: existing.photoURL || user.photoURL || '',
+        lastLoginAt: now,
+      };
+      await setDoc(userRef, userData, { merge: true });
+      return { ...existing, ...userData };
+    } else {
+      const userData = {
+        uid: user.uid,
+        email: user.email || '',
+        displayName: user.displayName || '마이링크 사용자',
+        photoURL: user.photoURL || '',
+        lastLoginAt: now,
+        createdAt: now,
+      };
+      await setDoc(userRef, userData, { merge: true });
+      return userData;
+    }
   } catch (error) {
     console.error('Firestore users/{uid} 저장 실패:', error);
   }
@@ -129,7 +145,7 @@ export async function getUserProfileFromFirestore(uid: string) {
 
 /**
  * Display Name(닉네임) 중복 검사 함수
- * Firestore users 컬렉션에서 동일한 displayName이 존재하는지 확인합니다.
+ * Firestore users 컬렉션 및 시스템 예약 닉네임에서 동일한 displayName이 존재하는지 확인합니다.
  * @param displayName 확인할 닉네임
  * @param currentUid 현재 로그인한 사용자의 UID (자신의 기존 닉네임은 사용 가능 처리)
  */
@@ -151,11 +167,20 @@ export async function checkDisplayNameAvailability(
     return { available: false, message: '닉네임은 20자 이하이어야 합니다.' };
   }
 
-  const validRegex = /^[a-zA-Z0-9가-힣_\-\s]+$/;
+  const validRegex = /^[a-zA-Z0-9가-힣_\-\s()]+$/;
   if (!validRegex.test(trimmed)) {
     return {
       available: false,
-      message: '한글, 영문, 숫자, 언더바(_), 하이픈(-), 공백만 사용할 수 있어요.',
+      message: '한글, 영문, 숫자, 언더바(_), 하이픈(-), 괄호(), 공백만 사용할 수 있어요.',
+    };
+  }
+
+  // 시연용 더미 페르소나 및 시스템 예약 닉네임 중복 방지 (오프라인/게스트 시연 지원)
+  const reservedDummyNames = ['하나 (hana)', '민준 (minjun)', '유나 (yuna)'];
+  if (reservedDummyNames.includes(trimmed.toLowerCase())) {
+    return {
+      available: false,
+      message: '이미 다른 사용자가 사용 중인 닉네임입니다.',
     };
   }
 

@@ -19,6 +19,7 @@ import {
   Layers,
   ChevronDown,
   ShieldCheck,
+  Pencil,
 } from 'lucide-react';
 import { subscribeLinksFromFirestore } from '@/lib/firebase';
 import { getProfileData } from '@/lib/profileStorage';
@@ -386,8 +387,8 @@ export function Header() {
                       className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-[#191F28] hover:bg-[#F2F4F6] rounded-xl transition-colors"
                     >
                       <span className="flex items-center gap-2">
-                        <Settings className="w-4 h-4 text-[#185EF7]" />
-                        <span>내 링크 관리 대시보드</span>
+                        <Pencil className="w-4 h-4 text-[#185EF7]" />
+                        <span>프로필 수정 & 링크 관리</span>
                       </span>
                       <span className="text-[10px] text-[#8B95A1]">/my</span>
                     </Link>

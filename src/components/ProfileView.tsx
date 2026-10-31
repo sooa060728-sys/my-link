@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { getProfileData, recordPageView, recordLinkClick } from '../lib/profileStorage';
+import React, { useState, useEffect } from 'react';
+import { getProfileData, recordPageView, recordLinkClick, INITIAL_PROFILE_DATA } from '../lib/profileStorage';
+import { getDummyProfile } from '../lib/dummyData';
 import { subscribeLinksFromFirestore } from '../lib/firebase';
-import { ProfileData } from '../types';
+import { ProfileData, LinkItem } from '../types';
 import { ThemeContainer } from './ThemeContainer';
 import { LinkCard } from './LinkCard';
 import { SocialIcons } from './SocialIcons';
@@ -14,8 +15,11 @@ interface ProfileViewProps {
 }
 
 export function ProfileView({ username }: ProfileViewProps) {
-  // 초기 상태를 getProfileData(username)으로 설정하여 SSR 및 초기 로딩 시 올바른 프로필 노출
-  const [profile, setProfile] = useState<ProfileData>(() => getProfileData(username));
+  // SSR과 클라이언트 첫 렌더링의 불일치(Hydration Mismatch)를 방지하기 위해 동일한 초기 더미 데이터를 사용하고,
+  // 마운트 후 useEffect에서 localStorage 및 최신 데이터를 반영합니다.
+  const [profile, setProfile] = useState<ProfileData>(() => {
+    return getDummyProfile(username) || { ...INITIAL_PROFILE_DATA, username };
+  });
 
   useEffect(() => {
     recordPageView(username);
@@ -24,9 +28,9 @@ export function ProfileView({ username }: ProfileViewProps) {
       setProfile(loadedData);
     }
 
-    const unsubscribe = subscribeLinksFromFirestore((firestoreLinks) => {
+    const unsubscribe = subscribeLinksFromFirestore((firestoreLinks: LinkItem[]) => {
       if (firestoreLinks.length > 0) {
-        setProfile((prev) => (prev ? { ...prev, links: firestoreLinks } : prev));
+        setProfile((prev: ProfileData) => ({ ...prev, links: firestoreLinks }));
       }
     });
 

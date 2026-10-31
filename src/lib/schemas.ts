@@ -64,8 +64,8 @@ export const profileSchema = z.object({
     .trim()
     .min(2, { message: '닉네임(Display Name)은 2자 이상이어야 합니다.' })
     .max(20, { message: '닉네임(Display Name)은 20자 이하로 입력해 주세요.' })
-    .regex(/^[a-zA-Z0-9가-힣_\-\s]+$/, {
-      message: '한글, 영문, 숫자, 언더바(_), 하이픈(-), 공백만 사용할 수 있어요.',
+    .regex(/^[a-zA-Z0-9가-힣_\-\s()]+$/, {
+      message: '한글, 영문, 숫자, 언더바(_), 하이픈(-), 괄호(), 공백만 사용할 수 있어요.',
     }),
   bio: z
     .string()

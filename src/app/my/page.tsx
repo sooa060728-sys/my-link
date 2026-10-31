@@ -152,6 +152,7 @@ export default function MyPage() {
   const [username, setUsername] = useState('demo');
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [copiedPath, setCopiedPath] = useState(false);
+  const [isGuestMode, setIsGuestMode] = useState(false);
 
   // 다이얼로그 열림/닫힘 상태
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -240,16 +241,26 @@ export default function MyPage() {
       // 로그인된 경우 user.uid 기반 또는 이메일 접두사 핸들 사용
       const defaultUsername = user.email ? user.email.split('@')[0] : user.uid.slice(0, 8);
       setUsername(defaultUsername);
+    } else if (isGuestMode) {
+      setUsername('demo');
     }
-  }, [user]);
+  }, [user, isGuestMode]);
 
-  // Firestore 링크 실시간 연동 (users/{user.uid}/links)
+  // Firestore 링크 실시간 연동 (users/{user.uid}/links) 또는 게스트 모드 로컬 로드
   useEffect(() => {
-    // 로그아웃 상태이거나 인증 확인 중이면 진행하지 않음
+    // 인증 확인 중이면 진행하지 않음
     if (authLoading) return;
+
     if (!user) {
-      setIsLoadingLinks(false);
-      setSyncStatus('idle');
+      if (isGuestMode) {
+        const guestData = getProfileData(username);
+        setProfile(guestData);
+        setIsLoadingLinks(false);
+        setSyncStatus('synced');
+      } else {
+        setIsLoadingLinks(false);
+        setSyncStatus('idle');
+      }
       return;
     }
 
@@ -257,12 +268,13 @@ export default function MyPage() {
     setIsLoadingLinks(true);
     setSyncStatus('syncing');
 
-    // 로컬 스토리지에 저장된 기본 프로필 정보 로드
+    // 로컬 스토리지에 저장된 기본 프로필 정보 로드 (Firestore 유저 정보 우선 적용)
     const data = getProfileData(username);
     const initialProfile: ProfileData = {
       ...data,
-      name: data.name || user.displayName || '구글 사용자',
-      avatarUrl: data.avatarUrl || user.photoURL || '',
+      name: firestoreUser?.displayName || data.name || user.displayName || '구글 사용자',
+      bio: firestoreUser?.bio !== undefined ? firestoreUser.bio : data.bio || '',
+      avatarUrl: firestoreUser?.photoURL || data.avatarUrl || user.photoURL || '',
       username: username,
     };
     setProfile(initialProfile);
@@ -286,7 +298,22 @@ export default function MyPage() {
     );
 
     return () => unsubscribe();
-  }, [user, username, authLoading]);
+  }, [user, username, authLoading, isGuestMode, firestoreUser]);
+
+  // Firestore 유저 프로필(displayName, photoURL, bio) 실시간 상태 동기화
+  useEffect(() => {
+    if (user && firestoreUser) {
+      setProfile((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          name: firestoreUser.displayName || prev.name,
+          bio: firestoreUser.bio !== undefined ? firestoreUser.bio : prev.bio,
+          avatarUrl: firestoreUser.photoURL || prev.avatarUrl,
+        };
+      });
+    }
+  }, [user, firestoreUser]);
 
   // Firestore 컬렉션 경로 복사 함수
   const handleCopyFirestorePath = () => {
@@ -300,7 +327,7 @@ export default function MyPage() {
 
   // --- 1. 링크 추가 제출 (RHF + Zod + Firestore users/{user.uid}/links) ---
   const onAddBlockSubmit = async (data: BlockFormValues) => {
-    if (!user || !profile || isSubmittingBlock) return;
+    if (!profile || isSubmittingBlock) return;
     setIsSubmittingBlock(true);
     setSyncStatus('syncing');
 
@@ -325,11 +352,13 @@ export default function MyPage() {
     };
 
     try {
-      // Firestore (users/{user.uid}/links) 저장
-      await Promise.all([
-        addLinkToFirestore(newLink, user.uid),
-        new Promise((resolve) => setTimeout(resolve, 400)),
-      ]);
+      if (user) {
+        // Firestore (users/{user.uid}/links) 저장
+        await Promise.all([
+          addLinkToFirestore(newLink, user.uid),
+          new Promise((resolve) => setTimeout(resolve, 400)),
+        ]);
+      }
       setSyncStatus('synced');
 
       const updatedProfile: ProfileData = {
@@ -343,7 +372,7 @@ export default function MyPage() {
       setIsAddDialogOpen(false);
       toast.success('새 블록이 성공적으로 추가되었어요!');
     } catch (e) {
-      console.error('Firestore 링크 저장 처리 에러:', e);
+      console.error('링크 저장 처리 에러:', e);
       setSyncStatus('idle');
       toast.error('블록 추가에 실패했습니다.');
     } finally {
@@ -369,7 +398,7 @@ export default function MyPage() {
   };
 
   const onEditBlockSubmit = async (data: BlockFormValues) => {
-    if (!user || !editingLinkId || !profile || isUpdatingBlock) return;
+    if (!editingLinkId || !profile || isUpdatingBlock) return;
     setIsUpdatingBlock(true);
     setSyncStatus('syncing');
 
@@ -390,15 +419,17 @@ export default function MyPage() {
       updatedAt: now,
     };
 
-    // Firestore 업데이트 (users/{user.uid}/links/{editingLinkId})
     try {
-      await Promise.all([
-        updateLinkInFirestore(editingLinkId, updatedLinkData, user.uid),
-        new Promise((resolve) => setTimeout(resolve, 350)),
-      ]);
+      if (user) {
+        // Firestore 업데이트 (users/{user.uid}/links/{editingLinkId})
+        await Promise.all([
+          updateLinkInFirestore(editingLinkId, updatedLinkData, user.uid),
+          new Promise((resolve) => setTimeout(resolve, 350)),
+        ]);
+      }
       setSyncStatus('synced');
     } catch (e) {
-      console.error('Firestore 링크 업데이트 에러:', e);
+      console.error('링크 업데이트 에러:', e);
       setSyncStatus('idle');
     } finally {
       setIsUpdatingBlock(false);
@@ -425,18 +456,20 @@ export default function MyPage() {
 
   // --- 3. 링크 삭제 확인 모달 실행 (Firestore users/{user.uid}/links) ---
   const handleConfirmDelete = async () => {
-    if (!user || !deletingLink || !profile || isDeletingInFirestore) return;
+    if (!deletingLink || !profile || isDeletingInFirestore) return;
     const targetId = deletingLink.id;
     setIsDeletingInFirestore(true);
     setSyncStatus('syncing');
 
     try {
-      // Firestore 삭제 (users/{user.uid}/links/{targetId})
-      await deleteLinkFromFirestore(targetId, user.uid);
+      if (user) {
+        // Firestore 삭제 (users/{user.uid}/links/{targetId})
+        await deleteLinkFromFirestore(targetId, user.uid);
+      }
       setSyncStatus('synced');
       toast.success('선택하신 블록이 삭제되었어요.');
     } catch (e) {
-      console.error('Firestore 링크 삭제 에러:', e);
+      console.error('링크 삭제 에러:', e);
       setSyncStatus('idle');
       toast.error('블록 삭제에 실패했습니다.');
     } finally {
@@ -457,16 +490,18 @@ export default function MyPage() {
   };
 
   const handleToggleActive = async (id: string) => {
-    if (!user || !profile) return;
+    if (!profile) return;
     const targetLink = profile.links.find((l) => l.id === id);
     if (!targetLink) return;
     const newActiveState = !targetLink.isActive;
     const now = new Date().toISOString();
 
-    // Firestore 업데이트
-    updateLinkInFirestore(id, { isActive: newActiveState, updatedAt: now }, user.uid).catch((e) =>
-      console.error('Firestore 활성화 토글 에러:', e)
-    );
+    if (user) {
+      // Firestore 업데이트
+      updateLinkInFirestore(id, { isActive: newActiveState, updatedAt: now }, user.uid).catch((e) =>
+        console.error('Firestore 활성화 토글 에러:', e)
+      );
+    }
 
     const updatedProfile: ProfileData = {
       ...profile,
@@ -542,10 +577,10 @@ export default function MyPage() {
       return;
     }
 
-    const validRegex = /^[a-zA-Z0-9가-힣_\-\s]+$/;
+    const validRegex = /^[a-zA-Z0-9가-힣_\-\s()]+$/;
     if (!validRegex.test(inputName)) {
       setDisplayNameCheckStatus('invalid');
-      setDisplayNameCheckMessage('한글, 영문, 숫자, 언더바(_), 하이픈(-), 공백만 사용할 수 있어요.');
+      setDisplayNameCheckMessage('한글, 영문, 숫자, 언더바(_), 하이픈(-), 괄호(), 공백만 사용할 수 있어요.');
       toast.error('허용되지 않는 특수문자가 포함되어 있습니다.');
       return;
     }
@@ -729,7 +764,7 @@ export default function MyPage() {
                 로그인 및 사용자 정보를 확인하고 있어요...
               </p>
             </div>
-          ) : !user ? (
+          ) : !user && !isGuestMode ? (
             /* =========================================================================
              * 2. [미로그인 화면]: 로그인 이후에 사용할 수 있도록 설명 문구 & 로그인 안내 페이지
              * ========================================================================= */
@@ -757,8 +792,8 @@ export default function MyPage() {
                   </p>
                 </div>
 
-                {/* Google 소셜 로그인 액션 버튼 */}
-                <div className="pt-2">
+                {/* Google 소셜 로그인 & 게스트 체험 버튼 */}
+                <div className="pt-2 space-y-3">
                   <button
                     onClick={() => login()}
                     disabled={isLoggingIn}
@@ -793,8 +828,25 @@ export default function MyPage() {
                       </>
                     )}
                   </button>
-                  <p className="text-[12px] text-[#8B95A1] mt-2.5">
-                    별도의 회원가입 절차 없이 즉시 무료로 이용할 수 있어요.
+
+                  <div className="flex items-center gap-3 py-0.5">
+                    <div className="h-px bg-[#E5E8EB] flex-1" />
+                    <span className="text-xs text-[#8B95A1] font-medium">또는</span>
+                    <div className="h-px bg-[#E5E8EB] flex-1" />
+                  </div>
+
+                  {/* 게스트 데모 체험 버튼 */}
+                  <button
+                    type="button"
+                    onClick={() => setIsGuestMode(true)}
+                    className="w-full h-12 bg-[#F2F8FF] hover:bg-[#E8F3FF] active:scale-[0.98] border border-[#D5E5FB] text-[#185EF7] font-bold text-sm rounded-2xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                  >
+                    <Sparkles className="w-4 h-4 text-[#185EF7]" />
+                    <span>로그인 없이 데모 모드로 프로필 수정 & 대시보드 체험하기</span>
+                  </button>
+
+                  <p className="text-[12px] text-[#8B95A1]">
+                    Google 로그인 시 Firestore 클라우드와 영구 동기화되며, 데모 모드는 로컬(localStorage)에 보관돼요.
                   </p>
                 </div>
               </div>
@@ -871,169 +923,233 @@ export default function MyPage() {
              * ========================================================================= */
             <div className="space-y-5 animate-in fade-in duration-300">
 
-              {/* 3.1 개인화된 Firestore 유저 정보 카드 (경로 및 프로필 상세 표시) */}
-              <div className="bg-white rounded-3xl p-5 border border-[#E5E8EB] shadow-xs space-y-4">
-                <div className="flex items-center justify-between pb-3 border-b border-[#F2F4F6]">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#20874E] animate-pulse" />
-                    <span className="text-xs font-bold text-[#191F28]">
-                      개인화된 Firestore 계정 연결됨
+              {/* 3.0 게스트 데모 모드 안내 카드 (미로그인 상태) */}
+              {!user && isGuestMode && (
+                <div className="bg-[#EEF5FF] rounded-3xl p-5 border border-[#D5E5FB] shadow-xs space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-[#D5E5FB]/60">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-[#185EF7]" />
+                      <span className="text-xs font-bold text-[#191F28]">
+                        게스트 데모 체험 모드
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-[#185EF7] bg-white px-2 py-0.5 rounded-full border border-[#D5E5FB]">
+                      로컬 저장소 (localStorage) 연동
                     </span>
                   </div>
-                  <span className="text-[11px] font-semibold text-[#8B95A1]">
-                    Google 소셜 인증
-                  </span>
-                </div>
 
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    {firestoreUser?.photoURL || user.photoURL ? (
-                      // eslint-disable-next-next/no-img-element
-                      <img
-                        src={firestoreUser?.photoURL || user.photoURL || ''}
-                        alt={firestoreUser?.displayName || user.displayName || '프로필'}
-                        className="w-14 h-14 rounded-2xl object-cover border-2 border-[#3182F6] shadow-xs flex-shrink-0"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-2xl bg-[#3182F6] text-white flex items-center justify-center font-bold text-xl shadow-xs flex-shrink-0">
-                        {(firestoreUser?.displayName || user.displayName || 'U').charAt(0)}
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h2 className="text-base font-bold text-[#191F28] truncate">
-                          {firestoreUser?.displayName || user.displayName || '구글 사용자'}
-                        </h2>
-                        <span className="text-[10px] bg-[#E8F3FF] text-[#3182F6] font-bold px-2 py-0.5 rounded-full flex-shrink-0">
-                          인증 완료
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#6B7684] truncate">{user.email}</p>
-                      <p className="text-[11px] text-[#8B95A1] font-mono mt-0.5 truncate">
-                        UID: {user.uid}
-                      </p>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+                    <p className="text-xs text-[#4E5968] leading-relaxed">
+                      현재 브라우저에 실시간 저장되며, 프로필 수정·닉네임 중복 확인·블록 추가 기능을 모두 즉시 테스트할 수 있어요.
+                    </p>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => login()}
+                        className="px-3 py-1.5 bg-[#185EF7] hover:bg-[#004FE2] active:scale-95 text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <span>Google 로그인 연동</span>
+                      </button>
+                      <button
+                        onClick={() => setIsGuestMode(false)}
+                        className="px-3 py-1.5 bg-white hover:bg-[#F2F4F6] text-[#6B7684] hover:text-[#191F28] font-bold text-xs rounded-xl border border-[#D5E5FB] transition-all cursor-pointer"
+                      >
+                        <span>체험 종료</span>
+                      </button>
                     </div>
                   </div>
-
-                  {/* 프로필 수정 및 로그아웃 버튼 */}
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <button
-                      onClick={handleOpenProfileDialog}
-                      className="px-3 py-1.5 text-[#3182F6] hover:bg-[#E8F3FF] bg-[#F2F8FF] border border-[#D5E5FB] rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer active:scale-95"
-                      title="프로필 수정"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                      <span>프로필 수정</span>
-                    </button>
-
-                    <button
-                      onClick={() => logout()}
-                      className="p-2 text-[#8B95A1] hover:text-[#F04452] hover:bg-[#FFF0F0] rounded-xl transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
-                      title="로그아웃"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      <span className="hidden sm:inline">로그아웃</span>
-                    </button>
-                  </div>
                 </div>
+              )}
 
-                {/* Firestore 컬렉션 경로 표시 배너 */}
-                <div className="p-3 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="font-bold text-[#4E5968] flex items-center gap-1.5">
-                      <Database className="w-3.5 h-3.5 text-[#3182F6]" />
-                      <span>개인화 저장 경로</span>
+              {/* 3.1 개인화된 Firestore 유저 정보 카드 (로그인된 경우 표시) */}
+              {user && (
+                <div className="bg-white rounded-3xl p-5 border border-[#E5E8EB] shadow-xs space-y-4">
+                  <div className="flex items-center justify-between pb-3 border-b border-[#F2F4F6]">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2.5 h-2.5 rounded-full bg-[#20874E] animate-pulse" />
+                      <span className="text-xs font-bold text-[#191F28]">
+                        개인화된 Firestore 계정 연결됨
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-[#8B95A1]">
+                      Google 소셜 인증
                     </span>
-                    <span className="text-[10px] text-[#8B95A1]">실시간 동기화 (onSnapshot)</span>
                   </div>
-                  <div className="flex items-center justify-between bg-white px-3 py-2 rounded-xl border border-[#E5E8EB] gap-2">
-                    <span className="font-mono text-xs text-[#3182F6] font-semibold truncate">
-                      users/{user.uid}/links
-                    </span>
-                    <button
-                      onClick={handleCopyFirestorePath}
-                      className="text-xs text-[#4E5968] hover:text-[#3182F6] flex items-center gap-1 font-semibold flex-shrink-0 cursor-pointer"
-                      title="경로 복사"
-                    >
-                      {copiedPath ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-[#20874E]" />
-                          <span className="text-[#20874E] text-[11px]">복사됨</span>
-                        </>
+
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {firestoreUser?.photoURL || user.photoURL ? (
+                        // eslint-disable-next-next/no-img-element
+                        <img
+                          src={firestoreUser?.photoURL || user.photoURL || ''}
+                          alt={firestoreUser?.displayName || user.displayName || '프로필'}
+                          className="w-14 h-14 rounded-2xl object-cover border-2 border-[#3182F6] shadow-xs flex-shrink-0"
+                        />
                       ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" />
-                          <span className="text-[11px]">복사</span>
-                        </>
+                        <div className="w-14 h-14 rounded-2xl bg-[#3182F6] text-white flex items-center justify-center font-bold text-xl shadow-xs flex-shrink-0">
+                          {(firestoreUser?.displayName || user.displayName || 'U').charAt(0)}
+                        </div>
                       )}
-                    </button>
-                  </div>
-                </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-base font-bold text-[#191F28] truncate">
+                            {firestoreUser?.displayName || user.displayName || '구글 사용자'}
+                          </h2>
+                          <span className="text-[10px] bg-[#E8F3FF] text-[#3182F6] font-bold px-2 py-0.5 rounded-full flex-shrink-0">
+                            인증 완료
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#6B7684] truncate">{user.email}</p>
+                        <p className="text-[11px] text-[#8B95A1] font-mono mt-0.5 truncate">
+                          UID: {user.uid}
+                        </p>
+                      </div>
+                    </div>
 
-                {/* 통계 요약 칩 */}
-                <div className="grid grid-cols-3 gap-2 text-center pt-1">
-                  <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
-                    <div className="text-[10px] text-[#8B95A1]">등록 링크</div>
-                    <div className="text-sm font-bold text-[#3182F6] tabular-nums">
-                      {links.length}개
+                    {/* 프로필 수정 및 로그아웃 버튼 */}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={handleOpenProfileDialog}
+                        className="px-3 py-1.5 text-[#3182F6] hover:bg-[#E8F3FF] bg-[#F2F8FF] border border-[#D5E5FB] rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer active:scale-95"
+                        title="프로필 수정"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>프로필 수정</span>
+                      </button>
+
+                      <button
+                        onClick={() => logout()}
+                        className="p-2 text-[#8B95A1] hover:text-[#F04452] hover:bg-[#FFF0F0] rounded-xl transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
+                        title="로그아웃"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span className="hidden sm:inline">로그아웃</span>
+                      </button>
                     </div>
                   </div>
-                  <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
-                    <div className="text-[10px] text-[#8B95A1]">누적 클릭수</div>
-                    <div className="text-sm font-bold text-[#191F28] tabular-nums">
-                      {totalClicks}회
+
+                  {/* Firestore 컬렉션 경로 표시 배너 */}
+                  <div className="p-3 rounded-2xl bg-[#F9FAFB] border border-[#E5E8EB] space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-[#4E5968] flex items-center gap-1.5">
+                        <Database className="w-3.5 h-3.5 text-[#3182F6]" />
+                        <span>개인화 저장 경로</span>
+                      </span>
+                      <span className="text-[10px] text-[#8B95A1]">실시간 동기화 (onSnapshot)</span>
+                    </div>
+                    <div className="flex items-center justify-between bg-white px-3 py-2 rounded-xl border border-[#E5E8EB] gap-2">
+                      <span className="font-mono text-xs text-[#3182F6] font-semibold truncate">
+                        users/{user.uid}/links
+                      </span>
+                      <button
+                        onClick={handleCopyFirestorePath}
+                        className="text-xs text-[#4E5968] hover:text-[#3182F6] flex items-center gap-1 font-semibold flex-shrink-0 cursor-pointer"
+                        title="경로 복사"
+                      >
+                        {copiedPath ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-[#20874E]" />
+                            <span className="text-[#20874E] text-[11px]">복사됨</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span className="text-[11px]">복사</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   </div>
-                  <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
-                    <div className="text-[10px] text-[#8B95A1]">총 방문수(PV)</div>
-                    <div className="text-sm font-bold text-[#191F28] tabular-nums">
-                      {totalPageViews}회
+
+                  {/* 통계 요약 칩 */}
+                  <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                    <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
+                      <div className="text-[10px] text-[#8B95A1]">등록 링크</div>
+                      <div className="text-sm font-bold text-[#3182F6] tabular-nums">
+                        {links.length}개
+                      </div>
+                    </div>
+                    <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
+                      <div className="text-[10px] text-[#8B95A1]">누적 클릭수</div>
+                      <div className="text-sm font-bold text-[#191F28] tabular-nums">
+                        {totalClicks}회
+                      </div>
+                    </div>
+                    <div className="p-2 bg-[#F9FAFB] rounded-xl border border-[#E5E8EB]">
+                      <div className="text-[10px] text-[#8B95A1]">총 방문수(PV)</div>
+                      <div className="text-sm font-bold text-[#191F28] tabular-nums">
+                        {totalPageViews}회
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* 3.2 대시보드 프로필 헤더 & 액션 버튼 */}
-              <header className="bg-white rounded-3xl p-6 border border-[#E5E8EB] shadow-xs space-y-4 text-center sm:text-left">
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    {profile?.avatarUrl ? (
-                      // eslint-disable-next-next/no-img-element
-                      <img
-                        src={profile.avatarUrl}
-                        alt={profile.name}
-                        className="w-14 h-14 rounded-full object-cover border-2 border-[#5B5FC7]"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-full bg-[#5B5FC7] text-white flex items-center justify-center font-bold text-xl">
-                        {profile?.name ? profile.name.charAt(0) : 'M'}
-                      </div>
-                    )}
-                    <div>
-                      <div className="flex items-center gap-2 justify-center sm:justify-start">
-                        <h1 className="text-xl font-bold tracking-tight text-[#191F28]">
-                          {profile?.name || user.displayName || '마이링크'}
+              <header className="bg-white rounded-3xl p-5 sm:p-6 border border-[#E5E8EB] shadow-xs space-y-4 text-left">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+                  <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                    {/* 클릭 가능한 아바타 (호버 시 수정 아이콘 안내) */}
+                    <button
+                      type="button"
+                      onClick={handleOpenProfileDialog}
+                      className="relative group rounded-full cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#185EF7] focus:ring-offset-2 flex-shrink-0"
+                      title="프로필 정보 및 닉네임 수정"
+                    >
+                      {profile?.avatarUrl ? (
+                        // eslint-disable-next-next/no-img-element
+                        <img
+                          src={profile.avatarUrl}
+                          alt={profile.name}
+                          className="w-14 h-14 rounded-full object-cover border-2 border-[#185EF7] group-hover:opacity-90 transition-opacity"
+                        />
+                      ) : (
+                        <div className="w-14 h-14 rounded-full bg-[#185EF7] text-white flex items-center justify-center font-bold text-xl shadow-xs">
+                          {(profile?.name || user?.displayName || 'M').charAt(0)}
+                        </div>
+                      )}
+                      <span className="absolute bottom-0 right-0 p-1 bg-white rounded-full border border-[#E5E8EB] text-[#185EF7] shadow-xs group-hover:scale-110 transition-transform">
+                        <Pencil className="w-3 h-3" />
+                      </span>
+                    </button>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <h1 className="text-base sm:text-lg font-bold tracking-tight text-[#191F28] truncate">
+                          {profile?.name || user?.displayName || '마이링크'}
                         </h1>
-                        <span className="text-xs bg-[#F0F0FF] text-[#5B5FC7] font-semibold px-2 py-0.5 rounded-full border border-[#DCDCFB]">
+                        <span className="text-[11px] bg-[#EEF5FF] text-[#185EF7] font-semibold px-2 py-0.5 rounded-full border border-[#D5E5FB] flex-shrink-0">
                           @{profile?.username || username}
                         </span>
                       </div>
-                      <p className="text-xs text-[#6B7684] line-clamp-1 mt-0.5">
+                      <p className="text-xs text-[#6B7684] truncate mt-0.5" title={profile?.bio || '개인 링크 인 바이오 서비스'}>
                         {profile?.bio || '개인 링크 인 바이오 서비스'}
                       </p>
                     </div>
                   </div>
 
-                  {/* 공개 미리보기 버튼 */}
-                  <Link
-                    href={`/${profile?.username || username}`}
-                    target="_blank"
-                    className="w-full sm:w-auto px-4 py-2.5 bg-[#5B5FC7] hover:bg-[#4B4FA7] text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm"
-                  >
-                    <Eye className="w-4 h-4" />
-                    <span>공개 보기 (/{profile?.username || username})</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </Link>
+                  {/* 헤더 주요 액션 버튼 (프로필 수정 + 공개 보기) - 글자 잘림 및 줄바꿈 방지 */}
+                  <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={handleOpenProfileDialog}
+                      className="flex-1 sm:flex-none h-10 px-4 bg-[#185EF7] hover:bg-[#004FE2] active:scale-95 text-white font-bold text-xs rounded-xl transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
+                      title="프로필 정보 및 표시 이름(Display Name) 수정"
+                    >
+                      <Pencil className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span className="whitespace-nowrap">프로필 수정</span>
+                    </button>
+
+                    <Link
+                      href={`/${profile?.username || username}`}
+                      target="_blank"
+                      className="flex-1 sm:flex-none h-10 px-3.5 bg-[#F2F4F6] hover:bg-[#E5E8EB] active:scale-95 text-[#333D4B] font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap flex-shrink-0"
+                      title="새 탭에서 공개 프로필 보기"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-[#6B7684] flex-shrink-0" />
+                      <span className="whitespace-nowrap">공개 보기</span>
+                      <ExternalLink className="w-3 h-3 text-[#8B95A1] flex-shrink-0" />
+                    </Link>
+                  </div>
                 </div>
 
                 {/* 대시보드 컨트롤 바 (다이얼로그 버튼 모음) */}
@@ -1106,7 +1222,15 @@ export default function MyPage() {
                       )}
                     </div>
                     <p className="text-xs text-[#8B95A1] mt-0.5">
-                      Firestore <code className="font-mono text-[#3182F6]">users/{user.uid.slice(0, 6)}.../links</code>에 안전하게 보관돼요.
+                      {user ? (
+                        <>
+                          Firestore <code className="font-mono text-[#3182F6]">users/{user.uid.slice(0, 6)}.../links</code>에 안전하게 보관돼요.
+                        </>
+                      ) : (
+                        <>
+                          로컬 브라우저 <code className="font-mono text-[#3182F6]">localStorage</code>에 안전하게 보관돼요.
+                        </>
+                      )}
                     </p>
                   </div>
 
@@ -1738,12 +1862,22 @@ export default function MyPage() {
                     {...profileForm.register('name', {
                       onChange: (e) => {
                         const val = e.target.value.trim();
-                        if (val !== lastCheckedDisplayName) {
+                        const currentMyName = (firestoreUser?.displayName || profile?.name || user?.displayName || '').trim();
+                        if (val === currentMyName && val !== '') {
+                          setDisplayNameCheckStatus('same_as_current');
+                          setDisplayNameCheckMessage('현재 사용 중인 본인의 닉네임입니다.');
+                        } else if (val !== lastCheckedDisplayName) {
                           setDisplayNameCheckStatus('idle');
                           setDisplayNameCheckMessage('');
                         }
                       },
                     })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleCheckDisplayName();
+                      }
+                    }}
                     className={`flex-1 px-3.5 py-2 rounded-xl border text-sm placeholder-[#8B95A1] focus:outline-none transition-all ${
                       profileForm.formState.errors.name || displayNameCheckStatus === 'duplicate' || displayNameCheckStatus === 'invalid'
                         ? 'border-[#E90064] focus:ring-1 focus:ring-[#E90064]'
