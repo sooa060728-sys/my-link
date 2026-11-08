@@ -3,43 +3,48 @@
 import React, { useState, useEffect } from 'react';
 import { getProfileData, recordPageView, recordLinkClick, INITIAL_PROFILE_DATA } from '../lib/profileStorage';
 import { getDummyProfile } from '../lib/dummyData';
-import { subscribeLinksFromFirestore } from '../lib/firebase';
-import { ProfileData, LinkItem } from '../types';
+import { useLinksQuery } from '../hooks/useLinks';
+import { ProfileData } from '../types';
 import { ThemeContainer } from './ThemeContainer';
 import { LinkCard } from './LinkCard';
 import { SocialIcons } from './SocialIcons';
 import { Sparkles } from 'lucide-react';
 
 interface ProfileViewProps {
-  username: string;
+  username?: string;
+  displayName?: string;
+  userId?: string;
+  initialProfile?: ProfileData;
 }
 
-export function ProfileView({ username }: ProfileViewProps) {
-  // SSR과 클라이언트 첫 렌더링의 불일치(Hydration Mismatch)를 방지하기 위해 동일한 초기 더미 데이터를 사용하고,
-  // 마운트 후 useEffect에서 localStorage 및 최신 데이터를 반영합니다.
+export function ProfileView({ username, displayName, userId, initialProfile }: ProfileViewProps) {
+  const profileIdentifier = displayName || username || 'demo';
+
+  // initialProfile이 제공된 경우(예: displayName으로 Firestore 검색 성공) 즉시 반영
   const [profile, setProfile] = useState<ProfileData>(() => {
-    return getDummyProfile(username) || { ...INITIAL_PROFILE_DATA, username };
+    if (initialProfile) return initialProfile;
+    return getDummyProfile(profileIdentifier) || { ...INITIAL_PROFILE_DATA, username: profileIdentifier };
   });
 
+  // userId가 존재할 경우 users/{userId}/links에서 링크 자동 실시간 캐시 조회
+  const { data: cachedLinks = [] } = useLinksQuery(userId || null, profileIdentifier);
+  const displayLinks = cachedLinks.length > 0 ? cachedLinks : profile.links;
+
   useEffect(() => {
-    recordPageView(username);
-    const loadedData = getProfileData(username);
-    if (loadedData) {
-      setProfile(loadedData);
-    }
-
-    const unsubscribe = subscribeLinksFromFirestore((firestoreLinks: LinkItem[]) => {
-      if (firestoreLinks.length > 0) {
-        setProfile((prev: ProfileData) => ({ ...prev, links: firestoreLinks }));
+    recordPageView(profileIdentifier);
+    if (!initialProfile) {
+      const loadedData = getProfileData(profileIdentifier);
+      if (loadedData) {
+        setProfile(loadedData);
       }
-    });
-
-    return () => unsubscribe();
-  }, [username]);
+    }
+  }, [profileIdentifier, initialProfile]);
 
   const handleLinkClick = (linkId: string) => {
-    recordLinkClick(username, linkId);
-    setProfile(getProfileData(username));
+    recordLinkClick(profileIdentifier, linkId);
+    if (!userId) {
+      setProfile(getProfileData(profileIdentifier));
+    }
   };
 
   return (
@@ -76,7 +81,7 @@ export function ProfileView({ username }: ProfileViewProps) {
 
       {/* 링크 목록 */}
       <div className="w-full space-y-1">
-        {profile.links.map((link) => (
+        {displayLinks.map((link) => (
           <LinkCard
             key={link.id}
             item={link}

@@ -39,13 +39,15 @@ import {
   LogOut,
 } from 'lucide-react';
 import { getProfileData, saveProfileData } from '@/lib/profileStorage';
+import { checkDisplayNameAvailability } from '@/lib/firebase';
 import {
-  addLinkToFirestore,
-  updateLinkInFirestore,
-  deleteLinkFromFirestore,
-  subscribeLinksFromFirestore,
-  checkDisplayNameAvailability,
-} from '@/lib/firebase';
+  useLinksQuery,
+  useAddLinkMutation,
+  useUpdateLinkMutation,
+  useDeleteLinkMutation,
+  useReorderLinksMutation,
+  useToggleActiveMutation,
+} from '@/hooks/useLinks';
 import { DUMMY_PROFILES } from '@/lib/dummyData';
 import { ProfileData, LinkItem as ProfileLinkItem, ThemeType, ButtonStyleType, SocialLinkItem } from '@/types';
 import Link from 'next/link';
@@ -172,15 +174,34 @@ export default function MyPage() {
   // 인라인 수정 대상 링크 ID
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
 
-  // 삭제 확인 모달 대상 링크 및 삭제 진행 상태
+  // 삭제 확인 모달 대상 링크
   const [deletingLink, setDeletingLink] = useState<ProfileLinkItem | null>(null);
-  const [isDeletingInFirestore, setIsDeletingInFirestore] = useState(false);
 
-  // 로딩 & 동기화 상태 관리
-  const [isLoadingLinks, setIsLoadingLinks] = useState(true);
-  const [isSubmittingBlock, setIsSubmittingBlock] = useState(false);
-  const [isUpdatingBlock, setIsUpdatingBlock] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'idle'>('idle');
+  // TanStack Query 링크 관리 훅 (캐시, 낙관적 업데이트, 실시간 동기화)
+  const effectiveUserId = user ? user.uid : null;
+  const {
+    data: links = [],
+    isLoading: isQueryLoading,
+    isFetching: isQueryFetching,
+  } = useLinksQuery(effectiveUserId, username);
+
+  const addLinkMutation = useAddLinkMutation(effectiveUserId, username);
+  const updateLinkMutation = useUpdateLinkMutation(effectiveUserId, username);
+  const deleteLinkMutation = useDeleteLinkMutation(effectiveUserId, username);
+  const reorderLinksMutation = useReorderLinksMutation(effectiveUserId, username);
+  const { toggleActive: mutateToggleActive } = useToggleActiveMutation(
+    effectiveUserId,
+    username
+  );
+
+  const isLoadingLinks = isQueryLoading;
+  const isSubmittingBlock = addLinkMutation.isPending;
+  const isUpdatingBlock = updateLinkMutation.isPending;
+  const isDeletingInFirestore = deleteLinkMutation.isPending;
+  const syncStatus: 'syncing' | 'synced' | 'idle' =
+    isSubmittingBlock || isUpdatingBlock || isDeletingInFirestore || isQueryFetching
+      ? 'syncing'
+      : 'synced';
 
   // 1) React Hook Form + Zod: 블록 추가 폼
   const addBlockForm = useForm<BlockFormValues>({
@@ -246,58 +267,25 @@ export default function MyPage() {
     }
   }, [user, isGuestMode]);
 
-  // Firestore 링크 실시간 연동 (users/{user.uid}/links) 또는 게스트 모드 로컬 로드
+  // 기본 프로필 정보 로드 (Firestore 유저 정보 우선 적용)
   useEffect(() => {
     // 인증 확인 중이면 진행하지 않음
     if (authLoading) return;
 
-    if (!user) {
-      if (isGuestMode) {
-        const guestData = getProfileData(username);
-        setProfile(guestData);
-        setIsLoadingLinks(false);
-        setSyncStatus('synced');
-      } else {
-        setIsLoadingLinks(false);
-        setSyncStatus('idle');
-      }
+    if (!user && !isGuestMode) {
       return;
     }
-
-    const currentUid = user.uid;
-    setIsLoadingLinks(true);
-    setSyncStatus('syncing');
 
     // 로컬 스토리지에 저장된 기본 프로필 정보 로드 (Firestore 유저 정보 우선 적용)
     const data = getProfileData(username);
     const initialProfile: ProfileData = {
       ...data,
-      name: firestoreUser?.displayName || data.name || user.displayName || '구글 사용자',
+      name: firestoreUser?.displayName || data.name || user?.displayName || '구글 사용자',
       bio: firestoreUser?.bio !== undefined ? firestoreUser.bio : data.bio || '',
-      avatarUrl: firestoreUser?.photoURL || data.avatarUrl || user.photoURL || '',
+      avatarUrl: firestoreUser?.photoURL || data.avatarUrl || user?.photoURL || '',
       username: username,
     };
     setProfile(initialProfile);
-
-    // Firestore(users/{user.uid}/links)에서 최신순 정렬 링크 실시간 구독
-    const unsubscribe = subscribeLinksFromFirestore(
-      (firestoreLinks) => {
-        setProfile((prev) => (prev ? { ...prev, links: firestoreLinks } : {
-          ...initialProfile,
-          links: firestoreLinks,
-        }));
-        setIsLoadingLinks(false);
-        setSyncStatus('synced');
-      },
-      (error) => {
-        console.error(`Firestore (users/${currentUid}/links) 구독 에러:`, error);
-        setIsLoadingLinks(false);
-        setSyncStatus('idle');
-      },
-      currentUid
-    );
-
-    return () => unsubscribe();
   }, [user, username, authLoading, isGuestMode, firestoreUser]);
 
   // Firestore 유저 프로필(displayName, photoURL, bio) 실시간 상태 동기화
@@ -325,11 +313,9 @@ export default function MyPage() {
     setTimeout(() => setCopiedPath(false), 2000);
   };
 
-  // --- 1. 링크 추가 제출 (RHF + Zod + Firestore users/{user.uid}/links) ---
+  // --- 1. 링크 추가 제출 (TanStack Query useAddLinkMutation + RHF + Zod) ---
   const onAddBlockSubmit = async (data: BlockFormValues) => {
-    if (!profile || isSubmittingBlock) return;
-    setIsSubmittingBlock(true);
-    setSyncStatus('syncing');
+    if (isSubmittingBlock) return;
 
     let formattedUrl = data.url?.trim() || '';
     if (data.blockType === 'link' && formattedUrl) {
@@ -352,35 +338,17 @@ export default function MyPage() {
     };
 
     try {
-      if (user) {
-        // Firestore (users/{user.uid}/links) 저장
-        await Promise.all([
-          addLinkToFirestore(newLink, user.uid),
-          new Promise((resolve) => setTimeout(resolve, 400)),
-        ]);
-      }
-      setSyncStatus('synced');
-
-      const updatedProfile: ProfileData = {
-        ...profile,
-        links: [newLink, ...profile.links],
-      };
-
-      setProfile(updatedProfile);
-      saveProfileData(username, updatedProfile);
+      await addLinkMutation.mutateAsync(newLink);
       addBlockForm.reset({ blockType: 'link', title: '', url: '', icon: 'Globe', isActive: true });
       setIsAddDialogOpen(false);
       toast.success('새 블록이 성공적으로 추가되었어요!');
     } catch (e) {
       console.error('링크 저장 처리 에러:', e);
-      setSyncStatus('idle');
       toast.error('블록 추가에 실패했습니다.');
-    } finally {
-      setIsSubmittingBlock(false);
     }
   };
 
-  // --- 2. 링크 인라인 수정 시작/취소 & 제출 (RHF + Zod + Firestore users/{user.uid}/links) ---
+  // --- 2. 링크 인라인 수정 시작/취소 & 제출 (TanStack Query useUpdateLinkMutation) ---
   const handleStartInlineEdit = (link: ProfileLinkItem) => {
     setEditingLinkId(link.id);
     editBlockForm.reset({
@@ -398,9 +366,7 @@ export default function MyPage() {
   };
 
   const onEditBlockSubmit = async (data: BlockFormValues) => {
-    if (!editingLinkId || !profile || isUpdatingBlock) return;
-    setIsUpdatingBlock(true);
-    setSyncStatus('syncing');
+    if (!editingLinkId || isUpdatingBlock) return;
 
     let formattedUrl = data.url?.trim() || '';
     if (data.blockType === 'link' && formattedUrl) {
@@ -420,116 +386,63 @@ export default function MyPage() {
     };
 
     try {
-      if (user) {
-        // Firestore 업데이트 (users/{user.uid}/links/{editingLinkId})
-        await Promise.all([
-          updateLinkInFirestore(editingLinkId, updatedLinkData, user.uid),
-          new Promise((resolve) => setTimeout(resolve, 350)),
-        ]);
-      }
-      setSyncStatus('synced');
+      await updateLinkMutation.mutateAsync({
+        id: editingLinkId,
+        updates: updatedLinkData,
+      });
+      editBlockForm.reset();
+      setEditingLinkId(null);
+      toast.success('블록 정보가 수정되었어요!');
     } catch (e) {
       console.error('링크 업데이트 에러:', e);
-      setSyncStatus('idle');
-    } finally {
-      setIsUpdatingBlock(false);
+      toast.error('블록 수정에 실패했습니다.');
     }
-
-    const updatedProfile: ProfileData = {
-      ...profile,
-      links: profile.links.map((link) =>
-        link.id === editingLinkId
-          ? {
-              ...link,
-              ...updatedLinkData,
-            }
-          : link
-      ),
-    };
-
-    setProfile(updatedProfile);
-    saveProfileData(username, updatedProfile);
-    editBlockForm.reset();
-    setEditingLinkId(null);
-    toast.success('블록 정보가 수정되었어요!');
   };
 
-  // --- 3. 링크 삭제 확인 모달 실행 (Firestore users/{user.uid}/links) ---
+  // --- 3. 링크 삭제 확인 모달 실행 (TanStack Query useDeleteLinkMutation) ---
   const handleConfirmDelete = async () => {
-    if (!deletingLink || !profile || isDeletingInFirestore) return;
+    if (!deletingLink || isDeletingInFirestore) return;
     const targetId = deletingLink.id;
-    setIsDeletingInFirestore(true);
-    setSyncStatus('syncing');
 
     try {
-      if (user) {
-        // Firestore 삭제 (users/{user.uid}/links/{targetId})
-        await deleteLinkFromFirestore(targetId, user.uid);
-      }
-      setSyncStatus('synced');
+      await deleteLinkMutation.mutateAsync(targetId);
       toast.success('선택하신 블록이 삭제되었어요.');
+      setDeletingLink(null);
+      if (editingLinkId === targetId) {
+        setEditingLinkId(null);
+      }
     } catch (e) {
       console.error('링크 삭제 에러:', e);
-      setSyncStatus('idle');
       toast.error('블록 삭제에 실패했습니다.');
-    } finally {
-      setIsDeletingInFirestore(false);
-    }
-
-    const updatedProfile: ProfileData = {
-      ...profile,
-      links: profile.links.filter((link) => link.id !== targetId),
-    };
-
-    setProfile(updatedProfile);
-    saveProfileData(username, updatedProfile);
-    setDeletingLink(null);
-    if (editingLinkId === targetId) {
-      setEditingLinkId(null);
     }
   };
 
   const handleToggleActive = async (id: string) => {
-    if (!profile) return;
-    const targetLink = profile.links.find((l) => l.id === id);
+    const targetLink = links.find((l) => l.id === id);
     if (!targetLink) return;
-    const newActiveState = !targetLink.isActive;
-    const now = new Date().toISOString();
 
-    if (user) {
-      // Firestore 업데이트
-      updateLinkInFirestore(id, { isActive: newActiveState, updatedAt: now }, user.uid).catch((e) =>
-        console.error('Firestore 활성화 토글 에러:', e)
-      );
+    try {
+      await mutateToggleActive(targetLink);
+      toast.info(!targetLink.isActive ? '블록이 공개 상태로 전환되었어요.' : '블록이 비공개 처리되었어요.');
+    } catch (e) {
+      console.error('활성화 상태 변경 에러:', e);
+      toast.error('활성화 상태를 변경하지 못했습니다.');
     }
-
-    const updatedProfile: ProfileData = {
-      ...profile,
-      links: profile.links.map((link) =>
-        link.id === id ? { ...link, isActive: newActiveState, updatedAt: now } : link
-      ),
-    };
-
-    setProfile(updatedProfile);
-    saveProfileData(username, updatedProfile);
-    toast.info(newActiveState ? '블록이 공개 상태로 전환되었어요.' : '블록이 비공개 처리되었어요.');
   };
 
-  const handleMoveLink = (index: number, direction: 'up' | 'down') => {
-    if (!profile) return;
-    const newLinks = [...profile.links];
+  const handleMoveLink = async (index: number, direction: 'up' | 'down') => {
+    const newLinks = [...links];
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     if (targetIndex < 0 || targetIndex >= newLinks.length) return;
 
     const [movedItem] = newLinks.splice(index, 1);
     newLinks.splice(targetIndex, 0, movedItem);
 
-    const updatedProfile: ProfileData = {
-      ...profile,
-      links: newLinks,
-    };
-    setProfile(updatedProfile);
-    saveProfileData(username, updatedProfile);
+    try {
+      await reorderLinksMutation.mutateAsync(newLinks);
+    } catch (e) {
+      console.error('순서 변경 에러:', e);
+    }
   };
 
   // --- 4. 프로필 정보 & 테마 수정 (RHF + Zod + 중복 검사 + Firestore 연동) ---
@@ -720,10 +633,12 @@ export default function MyPage() {
   // --- 6. 통계 리셋 ---
   const handleResetAnalytics = () => {
     if (!profile) return;
+    const resetLinks = links.map((link) => ({ ...link, clicks: 0 }));
+    reorderLinksMutation.mutate(resetLinks);
     const updatedProfile: ProfileData = {
       ...profile,
       pageViews: 0,
-      links: profile.links.map((link) => ({ ...link, clicks: 0 })),
+      links: resetLinks,
     };
     setProfile(updatedProfile);
     saveProfileData(username, updatedProfile);
@@ -743,7 +658,6 @@ export default function MyPage() {
     handleSwitchProfile(cleanUsername);
   };
 
-  const links = profile?.links || [];
   const socials = profile?.socials || [];
   const totalPageViews = profile?.pageViews || 0;
   const totalClicks = links.reduce((acc, l) => acc + (l.clicks || 0), 0);
@@ -1140,10 +1054,10 @@ export default function MyPage() {
                     </button>
 
                     <Link
-                      href={`/${profile?.username || username}`}
+                      href={`/${encodeURIComponent(firestoreUser?.displayName || user?.displayName || profile?.name || username)}`}
                       target="_blank"
                       className="flex-1 sm:flex-none h-10 px-3.5 bg-[#F2F4F6] hover:bg-[#E5E8EB] active:scale-95 text-[#333D4B] font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap flex-shrink-0"
-                      title="새 탭에서 공개 프로필 보기"
+                      title="새 탭에서 내 공개 프로필 보기"
                     >
                       <Eye className="w-3.5 h-3.5 text-[#6B7684] flex-shrink-0" />
                       <span className="whitespace-nowrap">공개 보기</span>

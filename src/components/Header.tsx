@@ -21,9 +21,8 @@ import {
   ShieldCheck,
   Pencil,
 } from 'lucide-react';
-import { subscribeLinksFromFirestore } from '@/lib/firebase';
+import { useLinksQuery } from '@/hooks/useLinks';
 import { getProfileData } from '@/lib/profileStorage';
-import { LinkItem } from '@/types';
 
 export function Header() {
   const router = useRouter();
@@ -32,30 +31,19 @@ export function Header() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
 
-  // 드롭다운에 표시할 사용자 통계 정보
-  const [linksCount, setLinksCount] = useState<number>(0);
-  const [totalClicks, setTotalClicks] = useState<number>(0);
+  const username = user?.email ? user.email.split('@')[0] : 'demo';
+  const currentDisplayName = (firestoreUser?.displayName || user?.displayName || username).trim();
+
+  // TanStack Query 캐시된 링크 목록 조회 (자동 실시간 동기화)
+  const { data: links = [] } = useLinksQuery(user?.uid, username);
+  const linksCount = links.length;
+  const totalClicks = links.reduce((acc, l) => acc + (l.clicks || 0), 0);
   const [pageViews, setPageViews] = useState<number>(0);
 
-  const username = user?.email ? user.email.split('@')[0] : 'demo';
-
-  // Firestore 링크 구독하여 실시간 통계 업데이트
   useEffect(() => {
     if (!user) return;
     const profile = getProfileData(username);
     setPageViews(profile.pageViews || 0);
-
-    const unsubscribe = subscribeLinksFromFirestore(
-      (firestoreLinks: LinkItem[]) => {
-        setLinksCount(firestoreLinks.length);
-        const clicks = firestoreLinks.reduce((acc, l) => acc + (l.clicks || 0), 0);
-        setTotalClicks(clicks);
-      },
-      undefined,
-      user.uid
-    );
-
-    return () => unsubscribe();
   }, [user, username]);
 
   // 바깥 클릭 시 드롭다운 닫기
@@ -123,29 +111,29 @@ export function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-[#E5E8EB] h-15 px-4 sm:px-6">
-      <div className="max-w-5xl mx-auto h-full flex items-center justify-between">
+    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#E5E8EB] h-15 px-4 sm:px-6">
+      <div className="max-w-6xl mx-auto h-full flex items-center justify-between gap-4">
         {/* 좌측: 로고 및 내비게이션 링크 */}
-        <div className="flex items-center gap-4 sm:gap-6">
-          <Link href="/" className="flex items-center gap-2 group">
-            <div className="w-8 h-8 rounded-xl bg-[#185EF7] flex items-center justify-center text-white font-black text-xs shadow-xs group-hover:scale-105 transition-transform">
+        <div className="flex items-center gap-5 sm:gap-6 flex-shrink-0">
+          <Link href="/" className="flex items-center gap-2.5 group flex-shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-[#185EF7] flex items-center justify-center text-white font-black text-xs shadow-xs group-hover:scale-105 transition-transform flex-shrink-0">
               ML
             </div>
-            <div className="flex flex-col">
-              <span className="font-extrabold text-[17px] text-[#191F28] tracking-tight flex items-center gap-1">
+            <div className="flex items-center gap-1.5 whitespace-nowrap flex-shrink-0">
+              <span className="font-extrabold text-[16px] sm:text-[17px] text-[#191F28] tracking-tight whitespace-nowrap">
                 마이링크
-                <span className="text-[10px] font-bold text-[#185EF7] bg-[#EEF5FF] px-1.5 py-0.2 rounded-md">
-                  MyLink
-                </span>
+              </span>
+              <span className="text-[10px] font-bold text-[#185EF7] bg-[#EEF5FF] px-1.5 py-0.5 rounded-md whitespace-nowrap">
+                MyLink
               </span>
             </div>
           </Link>
 
-          {/* 중앙 네비게이션 */}
-          <nav className="hidden md:flex items-center gap-1 text-sm font-medium">
+          {/* 중앙 네비게이션 (줄바꿈 원천 방지) */}
+          <nav className="hidden md:flex items-center gap-1 text-sm font-medium flex-shrink-0">
             <Link
               href="/"
-              className={`px-3 py-1.5 rounded-lg transition-colors ${
+              className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap flex-shrink-0 ${
                 pathname === '/'
                   ? 'bg-[#F2F4F6] text-[#191F28] font-bold'
                   : 'text-[#6B7684] hover:text-[#191F28] hover:bg-[#F9FAFB]'
@@ -155,33 +143,33 @@ export function Header() {
             </Link>
             <Link
               href="/my"
-              className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1 ${
+              className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
                 pathname === '/my'
                   ? 'bg-[#EEF5FF] text-[#185EF7] font-bold'
                   : 'text-[#6B7684] hover:text-[#191F28] hover:bg-[#F9FAFB]'
               }`}
             >
-              <Settings className="w-3.5 h-3.5" />
-              <span>내 링크 관리</span>
+              <Settings className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="whitespace-nowrap">내 링크 관리</span>
             </Link>
             <Link
               href="/links"
-              className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1 ${
+              className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
                 pathname === '/links'
                   ? 'bg-[#F2F4F6] text-[#191F28] font-bold'
                   : 'text-[#6B7684] hover:text-[#191F28] hover:bg-[#F9FAFB]'
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5 text-[#185EF7]" />
-              <span>시연 프로필</span>
+              <Sparkles className="w-3.5 h-3.5 text-[#185EF7] flex-shrink-0" />
+              <span className="whitespace-nowrap">시연 프로필</span>
             </Link>
           </nav>
         </div>
 
         {/* 우측: 구글 로그인 / 사용자 인증 상태 영역 */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
           {loading ? (
-            <div className="flex items-center gap-2 text-xs text-[#8B95A1] py-2 px-3">
+            <div className="flex items-center gap-2 text-xs text-[#8B95A1] py-2 px-3 whitespace-nowrap flex-shrink-0">
               <Loader2 className="w-4 h-4 animate-spin text-[#185EF7]" />
               <span>인증 확인 중...</span>
             </div>
@@ -189,38 +177,50 @@ export function Header() {
             /* =========================================================================
              * 로그인 완료 상태: 프로필 드롭다운 트리거 & 확장형 팝오버 메뉴
              * ========================================================================= */
-            <div className="relative" ref={dropdownRef}>
-              <div className="flex items-center gap-2 sm:gap-3">
-                {/* 데스크톱: Firestore 경로 칩 (원클릭 복사) */}
+            <div className="relative flex-shrink-0" ref={dropdownRef}>
+              <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0">
+                {/* 1. 개인별 공개 페이지 바로가기 (TDS 스타일 녹색 버튼) */}
+                <Link
+                  href={`/${encodeURIComponent(currentDisplayName)}`}
+                  target="_blank"
+                  className="flex items-center gap-1.5 h-9 px-3 bg-[#E8F8EE] hover:bg-[#D7F2E2] active:scale-95 border border-[#C6ECD3] text-[#20874E] text-xs font-bold rounded-xl transition-all shadow-2xs whitespace-nowrap flex-shrink-0 cursor-pointer"
+                  title={`내 공개 페이지 (/${currentDisplayName}) 새 탭에서 열기`}
+                >
+                  <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="whitespace-nowrap">내 공개 페이지</span>
+                </Link>
+
+                {/* 2. 데스크톱 Firestore 경로 칩 (xl 화면 이상에서만 깔끔하게 노출) */}
                 <button
                   onClick={handleCopyFirestorePath}
-                  className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 bg-[#F9FAFB] hover:bg-[#F2F4F6] border border-[#E5E8EB] rounded-lg text-[11px] font-mono text-[#4E5968] transition-colors cursor-pointer group"
+                  className="hidden xl:flex items-center gap-1.5 h-9 px-2.5 bg-[#F9FAFB] hover:bg-[#F2F4F6] border border-[#E5E8EB] rounded-xl text-[11px] font-mono text-[#4E5968] transition-colors cursor-pointer group whitespace-nowrap flex-shrink-0"
                   title="클릭하여 Firestore 컬렉션 경로 복사"
                 >
-                  <Database className="w-3.5 h-3.5 text-[#185EF7]" />
-                  <span>users/{user.uid.slice(0, 6)}.../links</span>
-                  <Copy className="w-3 h-3 text-[#B0B8C1] group-hover:text-[#4E5968]" />
+                  <Database className="w-3.5 h-3.5 text-[#185EF7] flex-shrink-0" />
+                  <span className="whitespace-nowrap">users/{user.uid.slice(0, 6)}.../links</span>
+                  <Copy className="w-3 h-3 text-[#B0B8C1] group-hover:text-[#4E5968] flex-shrink-0" />
                 </button>
 
-                {/* 유저 프로필 버튼 (클릭 시 확장 드롭다운 열림) */}
+                {/* 3. 유저 프로필 버튼 (아바타 + 닉네임 + 드롭다운 토글) */}
                 <button
                   onClick={() => setIsMenuOpen(!isMenuOpen)}
-                  className={`flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 rounded-full sm:rounded-xl transition-all border cursor-pointer ${
+                  className={`flex items-center gap-2 p-1 sm:px-2.5 sm:py-1 rounded-xl transition-all border cursor-pointer whitespace-nowrap flex-shrink-0 ${
                     isMenuOpen
                       ? 'bg-[#F2F4F6] border-[#D1D6DB]'
                       : 'border-transparent hover:bg-[#F2F4F6] hover:border-[#E5E8EB]'
                   }`}
+                  title="사용자 정보 및 프로필 메뉴 열기"
                 >
-                  <div className="relative">
+                  <div className="relative flex-shrink-0">
                     {firestoreUser?.photoURL || user.photoURL ? (
                       // eslint-disable-next-next/no-img-element
                       <img
                         src={firestoreUser?.photoURL || user.photoURL || ''}
                         alt={firestoreUser?.displayName || user.displayName || '사용자'}
-                        className="w-8 h-8 rounded-full object-cover border border-[#E5E8EB]"
+                        className="w-8 h-8 rounded-full object-cover border border-[#E5E8EB] flex-shrink-0"
                       />
                     ) : (
-                      <div className="w-8 h-8 rounded-full bg-[#185EF7] text-white flex items-center justify-center font-bold text-xs">
+                      <div className="w-8 h-8 rounded-full bg-[#185EF7] text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
                         {(firestoreUser?.displayName || user.displayName || 'U').charAt(0)}
                       </div>
                     )}
@@ -228,29 +228,30 @@ export function Header() {
                     <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-[#20874E] border-2 border-white" />
                   </div>
 
-                  <div className="hidden sm:flex flex-col text-left">
-                    <span className="text-xs font-bold text-[#191F28] leading-tight truncate max-w-[100px]">
+                  <div className="hidden sm:flex flex-col text-left min-w-0">
+                    <span className="text-xs font-bold text-[#191F28] leading-tight truncate max-w-[90px] whitespace-nowrap">
                       {firestoreUser?.displayName || user.displayName || '구글 사용자'}
                     </span>
-                    <span className="text-[10px] text-[#8B95A1] leading-tight truncate max-w-[120px]">
+                    <span className="text-[10px] text-[#8B95A1] leading-tight truncate max-w-[120px] whitespace-nowrap">
                       {user.email}
                     </span>
                   </div>
 
                   <ChevronDown
-                    className={`w-3.5 h-3.5 text-[#8B95A1] transition-transform duration-200 ${
+                    className={`w-3.5 h-3.5 text-[#8B95A1] transition-transform duration-200 flex-shrink-0 ${
                       isMenuOpen ? 'rotate-180' : ''
                     }`}
                   />
                 </button>
 
-                {/* 간편 로그아웃 아이콘 버튼 */}
+                {/* 4. 간편 로그아웃 아이콘 버튼 */}
                 <button
                   onClick={handleLogout}
-                  className="p-2 sm:px-2.5 sm:py-1.5 text-xs font-semibold text-[#6B7684] hover:text-[#F04452] hover:bg-[#FFF0F0] rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                  className="h-9 px-2 sm:px-2.5 text-xs font-semibold text-[#8B95A1] hover:text-[#F04452] hover:bg-[#FFF0F0] rounded-xl transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap flex-shrink-0"
                   title="로그아웃"
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-4 h-4 flex-shrink-0" />
+                  <span className="hidden sm:inline whitespace-nowrap">로그아웃</span>
                 </button>
               </div>
 
@@ -381,6 +382,22 @@ export function Header() {
 
                   {/* 5. 메뉴 링크 & 로그아웃 */}
                   <div className="space-y-1 pt-1 border-t border-[#F2F4F6]">
+                    {/* 개인별 공개 페이지 이동 */}
+                    <Link
+                      href={`/${encodeURIComponent(currentDisplayName)}`}
+                      target="_blank"
+                      onClick={() => setIsMenuOpen(false)}
+                      className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-[#191F28] hover:bg-[#E8F8EE] hover:text-[#20874E] rounded-xl transition-colors group"
+                    >
+                      <span className="flex items-center gap-2">
+                        <ExternalLink className="w-4 h-4 text-[#20874E]" />
+                        <span>내 공개 페이지 보기</span>
+                      </span>
+                      <span className="text-[10px] text-[#8B95A1] group-hover:text-[#20874E] font-mono truncate max-w-[120px]">
+                        /{currentDisplayName}
+                      </span>
+                    </Link>
+
                     <Link
                       href="/my"
                       onClick={() => setIsMenuOpen(false)}

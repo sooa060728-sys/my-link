@@ -1,0 +1,103 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // 헬퍼 함수 (Security Helper Functions)
+    // =========================================================================
+
+    // 1. 로그인 여부 확인
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // 2. 요청자가 해당 리소스의 소유자(본인)인지 확인
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 3. 유저 프로필 데이터 유효성 검증 (let 없이 순수 return 표현식 사용)
+    function isValidUserProfile(userId) {
+      return request.resource.data.uid == userId
+        && (!('displayName' in request.resource.data) || (request.resource.data.displayName is string && request.resource.data.displayName.size() >= 2 && request.resource.data.displayName.size() <= 20))
+        && (!('bio' in request.resource.data) || (request.resource.data.bio is string && request.resource.data.bio.size() <= 200))
+        && (!('photoURL' in request.resource.data) || (request.resource.data.photoURL is string && request.resource.data.photoURL.size() <= 1000));
+    }
+
+    // 4. 링크/헤더 블록 데이터 유효성 검증
+    function isValidLinkItem() {
+      return request.resource.data.title is string 
+        && request.resource.data.title.size() >= 1 
+        && request.resource.data.title.size() <= 50
+        && (!('url' in request.resource.data) || request.resource.data.url is string)
+        && (!('isActive' in request.resource.data) || request.resource.data.isActive is bool)
+        && (!('isHeader' in request.resource.data) || request.resource.data.isHeader is bool)
+        && (!('clicks' in request.resource.data) || request.resource.data.clicks is number);
+    }
+
+    // 5. 일반 방문자의 링크 클릭 수 카운팅(+1) 허용
+    function isOnlyClickIncrement() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clicks'])
+        && request.resource.data.clicks == resource.data.clicks + 1;
+    }
+
+    // =========================================================================
+    // 1. 유저 루트 프로필 컬렉션: users/{userId}
+    //    (마이링크의 로그인 정보 및 displayName 검색/조회 대상)
+    // =========================================================================
+    match /users/{userId} {
+      // [읽기]: 누구나 가능 (공개 프로필 /[displayName] 검색 및 상세 조회 지원)
+      allow read: if true;
+
+      // [생성]: 로그인된 본인만 가능 + UID 불변성 검증
+      allow create: if isOwner(userId) && isValidUserProfile(userId);
+
+      // [수정]: 로그인된 본인만 가능 + UID 변조 방지
+      allow update: if isOwner(userId) 
+        && request.resource.data.uid == resource.data.uid
+        && isValidUserProfile(userId);
+
+      // [삭제]: 로그인된 본인만 가능
+      allow delete: if isOwner(userId);
+
+      // =======================================================================
+      // 2. 링크 블록 하위 컬렉션: users/{userId}/links/{linkId}
+      // =======================================================================
+      match /links/{linkId} {
+        // [읽기]: 누구나 가능 (방문자가 공개 프로필 링크 목록을 열람)
+        allow read: if true;
+
+        // [생성]: 로그인된 본인만 가능 + 스키마 유효성 검증
+        allow create: if isOwner(userId) && isValidLinkItem();
+
+        // [수정]: 
+        // 1) 로그인된 본인의 전체 수정
+        // 2) 또는 일반 방문자의 링크 클릭 수(+1) 카운팅 업데이트 허용
+        allow update: if (isOwner(userId) && isValidLinkItem()) 
+                      || isOnlyClickIncrement();
+
+        // [삭제]: 로그인된 본인만 가능
+        allow delete: if isOwner(userId);
+      }
+
+      // =======================================================================
+      // 3. 프로필 상세 하위 컬렉션: users/{userId}/profile/{profileDoc}
+      // =======================================================================
+      match /profile/{profileDoc} {
+        // [읽기]: 누구나 가능
+        allow read: if true;
+
+        // [쓰기]: 로그인된 본인만 가능
+        allow create, update, delete: if isOwner(userId);
+      }
+    }
+
+    // =========================================================================
+    // 4. 기타 경로 기본 차단 (Default Deny)
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

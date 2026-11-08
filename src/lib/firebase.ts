@@ -21,6 +21,7 @@ import {
   query,
   orderBy,
   where,
+  limit,
   getDocs,
   onSnapshot,
   Unsubscribe,
@@ -141,6 +142,41 @@ export async function getUserProfileFromFirestore(uid: string) {
     console.error('Firestore users/{uid} 조회 실패:', error);
     return null;
   }
+}
+
+/**
+ * displayName으로 Firestore users 컬렉션에서 유저 검색
+ * @param displayName 검색할 사용자 닉네임 (URL 인코딩된 문자열 대응)
+ */
+export async function getUserByDisplayName(displayName: string) {
+  const decoded = decodeURIComponent(displayName).trim();
+  if (!decoded) return null;
+
+  try {
+    const usersRef = collection(db, 'users');
+    const q = query(usersRef, where('displayName', '==', decoded), limit(1));
+    const snapshot = await getDocs(q);
+
+    if (!snapshot.empty) {
+      const docSnap = snapshot.docs[0];
+      const data = docSnap.data();
+      return {
+        uid: docSnap.id,
+        displayName: data.displayName || decoded,
+        photoURL: data.photoURL || '',
+        bio: data.bio || '',
+        email: data.email || '',
+        theme: data.theme || 'gradient',
+        buttonStyle: data.buttonStyle || 'rounded',
+        socials: data.socials || [],
+        ...data,
+      };
+    }
+  } catch (error) {
+    console.error(`Firestore users 컬렉션 displayName(${decoded}) 검색 실패:`, error);
+  }
+
+  return null;
 }
 
 /**
