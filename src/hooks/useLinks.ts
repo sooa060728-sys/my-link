@@ -6,6 +6,7 @@ import {
   updateLinkInFirestore,
   deleteLinkFromFirestore,
   subscribeLinksFromFirestore,
+  incrementLinkClickInFirestore,
 } from '@/lib/firebase';
 import { getProfileData, saveProfileData } from '@/lib/profileStorage';
 import { LinkItem, ProfileData } from '@/types';
@@ -307,4 +308,52 @@ export function useToggleActiveMutation(userId?: string | null, username: string
       });
     },
   };
+}
+
+/**
+ * 7. 링크 클릭 카운트 기록 Mutation 훅
+ * - 낙관적 업데이트로 UI 즉시 반영 (0ms 반응 속도)
+ * - 로그인 사용자: Firestore에 increment(1) 원자적 저장
+ * - 게스트 모드: localStorage에 직접 카운트 저장
+ * - 오류 발생 시 조용히 무시 (클릭 카운팅은 non-critical 작업)
+ */
+export function useRecordLinkClickMutation(userId?: string | null, username: string = 'demo') {
+  const queryClient = useQueryClient();
+  const queryKey = getLinksQueryKey(userId, username);
+
+  return useMutation<void, Error, string>({
+    onMutate: async (linkId: string) => {
+      await queryClient.cancelQueries({ queryKey });
+
+      // 낙관적 업데이트: 캐시에서 해당 링크의 clicks를 즉시 +1
+      queryClient.setQueryData<LinkItem[]>(queryKey, (prev) =>
+        (prev || []).map((link) =>
+          link.id === linkId ? { ...link, clicks: (link.clicks || 0) + 1 } : link
+        )
+      );
+
+      // localStorage 즉시 동기화
+      try {
+        const profile = getProfileData(username);
+        const updatedLinks = profile.links.map((link) =>
+          link.id === linkId ? { ...link, clicks: (link.clicks || 0) + 1 } : link
+        );
+        saveProfileData(username, { ...profile, links: updatedLinks });
+      } catch (e) {
+        console.error('클릭 카운트 localStorage 저장 에러:', e);
+      }
+    },
+    mutationFn: async (linkId: string) => {
+      if (userId) {
+        // 로그인 사용자: Firestore에 원자적 increment
+        await incrementLinkClickInFirestore(linkId, userId);
+      }
+      // 게스트 모드: onMutate에서 localStorage를 이미 업데이트함
+    },
+    onError: (err) => {
+      // 클릭 카운팅 실패는 조용히 처리 (사용자 경험 방해 없음)
+      console.error('클릭 카운트 저장 실패:', err);
+    },
+    // 성공 시 쿼리 무효화는 하지 않음 — Firestore onSnapshot이 자동으로 최신 값을 반영해줌
+  });
 }

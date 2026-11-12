@@ -24,6 +24,7 @@ import {
   limit,
   getDocs,
   onSnapshot,
+  increment,
   Unsubscribe,
 } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
@@ -376,6 +377,21 @@ export async function deleteLinkFromFirestore(id: string, userId?: string) {
     throw error;
   }
 }
+
+/**
+ * 링크 클릭 수를 Firestore에서 원자적으로 1 증가시키는 함수
+ * FieldValue.increment를 사용하므로 동시 다중 클릭에도 정확한 카운팅을 보장합니다.
+ */
+export async function incrementLinkClickInFirestore(linkId: string, userId: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'users', userId, 'links', linkId);
+    await updateDoc(docRef, { clicks: increment(1) });
+  } catch (error) {
+    console.error(`Firestore 클릭 카운트 증가 실패 (linkId: ${linkId}):`, error);
+    throw error;
+  }
+}
+
 
 /**
  * Firestore(users/{userId}/links)에서 최신순(createdAt desc)으로 링크 목록 불러오기

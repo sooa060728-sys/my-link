@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { getProfileData, recordPageView, recordLinkClick, INITIAL_PROFILE_DATA } from '../lib/profileStorage';
+import { getProfileData, recordPageView, INITIAL_PROFILE_DATA } from '../lib/profileStorage';
 import { getDummyProfile } from '../lib/dummyData';
-import { useLinksQuery } from '../hooks/useLinks';
+import { useLinksQuery, useRecordLinkClickMutation } from '../hooks/useLinks';
 import { ProfileData } from '../types';
 import { ThemeContainer } from './ThemeContainer';
 import { LinkCard } from './LinkCard';
@@ -30,6 +30,9 @@ export function ProfileView({ username, displayName, userId, initialProfile }: P
   const { data: cachedLinks = [] } = useLinksQuery(userId || null, profileIdentifier);
   const displayLinks = cachedLinks.length > 0 ? cachedLinks : profile.links;
 
+  // 클릭 카운트 mutation 훅 (Firestore 로그인 유저 / 게스트 모두 처리)
+  const recordClickMutation = useRecordLinkClickMutation(userId || null, profileIdentifier);
+
   useEffect(() => {
     recordPageView(profileIdentifier);
     if (!initialProfile) {
@@ -41,8 +44,10 @@ export function ProfileView({ username, displayName, userId, initialProfile }: P
   }, [profileIdentifier, initialProfile]);
 
   const handleLinkClick = (linkId: string) => {
-    recordLinkClick(profileIdentifier, linkId);
+    // Firestore(로그인) 또는 localStorage(게스트) 양쪽 모두에 클릭 카운트 저장
+    recordClickMutation.mutate(linkId);
     if (!userId) {
+      // 게스트 모드: 로컬 프로필 상태도 즉시 갱신하여 화면 반영
       setProfile(getProfileData(profileIdentifier));
     }
   };

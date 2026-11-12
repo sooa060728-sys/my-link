@@ -37,9 +37,20 @@ service cloud.firestore {
     }
 
     // 5. 일반 방문자의 링크 클릭 수 카운팅(+1) 허용
+    // - clicks 필드 외 다른 필드 변경 불가 (보안)
+    // - 반드시 정확히 +1 증가만 허용 (점프 불가)
+    // - clicks 필드가 아직 없는 신규 링크도 1로 초기화 허용
     function isOnlyClickIncrement() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['clicks'])
-        && request.resource.data.clicks == resource.data.clicks + 1;
+        && (
+          // 기존 clicks 필드가 있는 경우: 정확히 +1
+          (('clicks' in resource.data)
+            && request.resource.data.clicks == resource.data.clicks + 1)
+          ||
+          // clicks 필드가 없던 신규 링크: 1로 초기화
+          (!('clicks' in resource.data)
+            && request.resource.data.clicks == 1)
+        );
     }
 
     // =========================================================================
