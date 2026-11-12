@@ -15,9 +15,25 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// OG 이미지 등 절대 주소 계산용 사이트 주소 (Vercel 배포 시 자동으로 운영 도메인 사용)
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : 'http://localhost:3000');
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "마이링크 (MyLink) | 링크인바이오",
   description: "개인화된 나만의 링크인바이오 서비스 - users/{user.uid}/links",
+  openGraph: {
+    siteName: "MyLink",
+    locale: "ko_KR",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+  },
 };
 
 export default function RootLayout({

@@ -199,3 +199,25 @@ body {
     @apply font-sans;
   }
 }
+/* ===== Landing page motion ===== */
+@keyframes ml-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes ml-pop {
+  0% { opacity: 0; transform: translate(-50%, 0) scale(0.8); }
+  20% { opacity: 1; transform: translate(-50%, -6px) scale(1.05); }
+  100% { opacity: 0; transform: translate(-50%, -28px) scale(1); }
+}
+@keyframes ml-word-in {
+  from { opacity: 0; transform: translateY(40%); filter: blur(4px); }
+  to { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+.ml-float { animation: ml-float 4s ease-in-out infinite; }
+.ml-float-delay { animation: ml-float 4.6s ease-in-out 0.8s infinite; }
+.ml-pop { animation: ml-pop 0.9s ease-out forwards; }
+.ml-word-in { animation: ml-word-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ml-float, .ml-float-delay, .ml-pop, .ml-word-in { animation: none; }
+}
