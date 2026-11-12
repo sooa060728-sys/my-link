@@ -486,4 +486,30 @@ export function subscribeLinksFromFirestore(
   );
 }
 
+/**
+ * 통계 페이지용: Firestore(users/{userId}/links)에서 클릭수 많은 순(clicks desc)으로 링크 목록 불러오기
+ * - 단일 필드 정렬이라 별도 복합 색인 없이 동작합니다.
+ * - clicks 필드가 없는 문서는 orderBy 결과에서 제외됩니다. (링크 생성 시 clicks: 0으로 저장됨)
+ */
+export async function getLinksByClicksFromFirestore(userId: string): Promise<LinkItem[]> {
+  const linksRef = collection(db, 'users', userId, 'links');
+  const q = query(linksRef, orderBy('clicks', 'desc'));
+  const querySnapshot = await getDocs(q);
+
+  return querySnapshot.docs.map((docSnap) => {
+    const data = docSnap.data();
+    return {
+      id: data.id || docSnap.id,
+      title: data.title || '',
+      url: data.url || '',
+      icon: data.icon,
+      isActive: data.isActive ?? true,
+      isHeader: data.isHeader ?? false,
+      clicks: data.clicks ?? 0,
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt,
+    };
+  });
+}
+
 export { app, auth, db, storage, analytics, onAuthStateChanged };

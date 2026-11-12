@@ -163,6 +163,19 @@ export function Header() {
               <Sparkles className="w-3.5 h-3.5 text-[#185EF7] flex-shrink-0" />
               <span className="whitespace-nowrap">시연 프로필</span>
             </Link>
+            {user && (
+              <Link
+                href="/stats"
+                className={`px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                  pathname === '/stats'
+                    ? 'bg-[#EEF5FF] text-[#185EF7] font-bold'
+                    : 'text-[#6B7684] hover:text-[#191F28] hover:bg-[#F9FAFB]'
+                }`}
+              >
+                <BarChart3 className="w-3.5 h-3.5 flex-shrink-0" />
+                <span className="whitespace-nowrap">통계</span>
+              </Link>
+            )}
           </nav>
         </div>
 
